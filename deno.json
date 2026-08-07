@@ -1,0 +1,12 @@
+{
+  "name": "@ikigai/wire",
+  "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
+  "exports": {
+    ".": "./src/mod.ts"
+  },
+  "tasks": {
+    "check": "deno fmt --check && deno lint && deno check src/mod.ts examples/demo.ts && deno test -A",
+    "test": "deno test -A"
+  }
+}
