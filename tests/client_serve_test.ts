@@ -1,6 +1,6 @@
 /**
  * The client and server halves against each other, in-process — both sides
- * of the v6 hello, all verbs, the meta faces, error rendering, timeouts.
+ * of the hello, all verbs, the meta faces, typed error crossing, timeouts.
  */
 
 import {
@@ -13,10 +13,17 @@ import * as wire from "../src/wire.ts";
 import {
   CacheStatus,
   Capability,
+  DeniedError,
   EndpointError,
   HelloMode,
+  InvalidArgumentError,
+  MissingArgumentError,
+  NotFoundError,
   reference,
   Representation,
+  TimeoutError,
+  UnavailableError,
+  UnresolvedError,
 } from "../src/wire.ts";
 import { connect, ConnectionLost } from "../src/client.ts";
 import { endpoint, Server, Space } from "../src/serve.ts";
@@ -60,13 +67,10 @@ function makeEndpoints() {
   ];
 }
 
-async function withServer(
-  fn: (path: string) => Promise<void>,
-  options: { stripAlias?: boolean } = {},
-): Promise<void> {
+async function withServer(fn: (path: string) => Promise<void>): Promise<void> {
   const dir = Deno.makeTempDirSync({ prefix: "ik-deno-" });
   const path = `${dir}/ts.sock`;
-  const server = new Server(makeEndpoints(), path, options);
+  const server = new Server(makeEndpoints(), path);
   const serving = server.serve();
   try {
     await fn(path);
@@ -77,10 +81,10 @@ async function withServer(
   }
 }
 
-Deno.test("source round-trips with the v6 hello on both sides", async () => {
+Deno.test("source round-trips with the hello on both sides", async () => {
   await withServer(async (path) => {
     await using k = await connect(path);
-    assertStrictEquals(k.serverVersion, 6);
+    assertStrictEquals(k.serverVersion, 7);
     const rep = await k.source("urn:ts:hello", { who: "Ada" });
     assertStrictEquals(rep.text, "Hello, Ada!");
     assertStrictEquals(rep.mediaType, "text/plain;charset=utf-8");
@@ -173,38 +177,98 @@ Deno.test("exists answers true; unsupported verbs are named", async () => {
   });
 });
 
-Deno.test("the error strings match the Rust kernel's renderings", async () => {
+Deno.test("errors cross TYPED, with the Rust kernel's message renderings", async () => {
   await withServer(async (path) => {
     await using k = await connect(path);
-    // Unresolved: exactly Error::Unresolved, no `endpoint error: ` prefix.
-    await assertRejects(
+    // Unresolved arrives as its own class (v7), same text as Rust's Display.
+    const unresolved = await assertRejects(
       () => k.source("urn:ts:nope"),
-      EndpointError,
+      UnresolvedError,
       "no endpoint resolved for urn:ts:nope",
     );
-    // Missing arg: exactly the Rust engine's text.
-    await assertRejects(
+    assertStrictEquals(unresolved.iri, "urn:ts:nope");
+    assertStrictEquals(unresolved.transient, false);
+    // Missing arg: typed, with exactly the Rust engine's text.
+    const missing = await assertRejects(
       () => k.source("urn:ts:hello"),
-      EndpointError,
+      MissingArgumentError,
       "missing required argument `who`",
     );
-    // A handler throw crosses (prefix stripped by the client).
+    assertStrictEquals(missing.argument, "who");
+    // A handler throw crosses as a (base) endpoint error, message intact.
     const err = await assertRejects(
       () => k.source("urn:ts:boom"),
       EndpointError,
     );
     assertStrictEquals(err.message, "boom");
+    assertStrictEquals(err.constructor, EndpointError);
   });
 });
 
-Deno.test("a by-reference argument is refused loudly", async () => {
+Deno.test("a handler may throw the typed classes; the taxonomy crosses", async () => {
+  // The wire v7 payoff for a served peer: a Deno endpoint can answer a real
+  // Denied/NotFound/Timeout/Unavailable that the client (and a Rust host)
+  // recognizes WITHOUT sniffing message text — transience included.
+  const defs = [
+    endpoint("urn:ts:gated", { summary: "denies" }, () => {
+      throw new DeniedError("needs urn:cap:x");
+    }),
+    endpoint("urn:ts:missing-row", { summary: "not found" }, () => {
+      throw new NotFoundError("no such row");
+    }),
+    endpoint("urn:ts:slowpoke", { summary: "times out" }, () => {
+      throw new TimeoutError("5s elapsed");
+    }),
+    endpoint("urn:ts:flaky", { summary: "unavailable" }, () => {
+      throw new UnavailableError("connection refused");
+    }),
+  ];
+  const dir = Deno.makeTempDirSync({ prefix: "ik-deno-" });
+  const path = `${dir}/typed.sock`;
+  const server = new Server(defs, path);
+  const serving = server.serve();
+  try {
+    await using k = await connect(path);
+    const denied = await assertRejects(
+      () => k.source("urn:ts:gated"),
+      DeniedError,
+      "needs urn:cap:x",
+    );
+    assertStrictEquals(denied.transient, false);
+    const notFound = await assertRejects(
+      () => k.source("urn:ts:missing-row"),
+      NotFoundError,
+      "no such row",
+    );
+    assertStrictEquals(notFound.transient, false);
+    const timeout = await assertRejects(
+      () => k.source("urn:ts:slowpoke"),
+      TimeoutError,
+      "5s elapsed",
+    );
+    assertStrictEquals(timeout.transient, true);
+    const unavailable = await assertRejects(
+      () => k.source("urn:ts:flaky"),
+      UnavailableError,
+      "connection refused",
+    );
+    assertStrictEquals(unavailable.transient, true);
+  } finally {
+    server.shutdown();
+    await serving;
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
+
+Deno.test("a by-reference argument is refused loudly, typed", async () => {
   await withServer(async (path) => {
     await using k = await connect(path);
-    await assertRejects(
+    const err = await assertRejects(
       () => k.source("urn:ts:hello", { who: reference("urn:x") }),
-      EndpointError,
+      InvalidArgumentError,
       "arrived by reference; this peer only takes inline values",
     );
+    assertStrictEquals(err.argument, "who");
   });
 });
 
@@ -278,7 +342,9 @@ Deno.test("a hung server trips the read deadline as ConnectionLost", async () =>
     const stream = new wire.FrameStream(conn);
     try {
       await stream.readFrame(); // the client hello
-      await stream.writeFrame(wire.encodeHello(wire.hello(6)));
+      await stream.writeFrame(
+        wire.encodeHello(wire.hello(wire.PROTOCOL_VERSION)),
+      );
       await stream.readFrame(); // the call — never answered
       await stream.readFrame(); // blocks until the client's timeout closes
     } catch {

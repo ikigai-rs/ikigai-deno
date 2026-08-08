@@ -36,6 +36,7 @@ import {
   EndpointError,
   type Representation,
 } from "../src/mod.ts";
+import { httpStatus } from "./http_status.ts";
 
 const HTMX = "https://unpkg.com/htmx.org@2.0.6/dist/htmx.min.js";
 
@@ -115,13 +116,15 @@ export async function createApp(
   const kernel = await connect(path);
   const app = new App<AppState>();
 
-  // Wire errors become gateway answers, as plain-text pages.
+  // Wire errors arrive TYPED (v7) and become truthful statuses, as
+  // plain-text pages: 403 for a remote denial, 404 not-found, 400 bad
+  // input, 503 transient, 502 for the rest.
   app.use(async (ctx) => {
     try {
       return await ctx.next();
     } catch (e) {
       if (e instanceof EndpointError) {
-        return new Response(e.message, { status: 502 });
+        return new Response(e.message, { status: httpStatus(e) });
       }
       if (e instanceof ConnectionLost) {
         return new Response(`${e.message} — is the peer running?`, {

@@ -40,7 +40,9 @@
  * is coerced by the declared type (`"3.5"` → 3.5, `"true"` → true), parsed
  * by zod, and the handler receives the TYPED output (`z.output<S>`) —
  * defaults applied, numbers as numbers, no `String(x)` coercion in handler
- * bodies. Bad input is a clean endpoint error naming the field.
+ * bodies. Bad input is a typed `InvalidArgument` naming the field — since
+ * wire v7 it crosses to the host AS that variant (an HTTP face can answer
+ * 400, not a blanket 502).
  *
  * This module is deliberately NOT re-exported from `mod.ts`: zod is a peer
  * dependency of this file alone, resolved only when `@ikigai/wire/zod` is
@@ -64,6 +66,7 @@ import {
   type Handler,
   type HandlerResult,
 } from "./serve.ts";
+import { InvalidArgumentError } from "./wire.ts";
 
 const XSD = "http://www.w3.org/2001/XMLSchema#";
 
@@ -189,8 +192,9 @@ function coerceValue(
 ): unknown {
   if (value instanceof Uint8Array) {
     // Bytes arrive only when the argument was not valid utf-8; every
-    // derivable schema type is textual, so name the problem plainly.
-    throw new Error(`invalid argument \`${name}\`: not valid UTF-8 text`);
+    // derivable schema type is textual, so name the problem plainly — and
+    // typed, so it crosses the wire as a real InvalidArgument (v7).
+    throw new InvalidArgumentError(name, "not valid UTF-8 text");
   }
   if (prop === undefined) return value;
   if (prop.type === "number" || prop.type === "integer") {
@@ -209,16 +213,23 @@ function coerceValue(
   return value;
 }
 
-/** One line per issue, each naming its field. */
-function renderIssues(error: z.ZodError): string {
-  return error.issues
-    .map((issue) => {
-      const path = issue.path.length === 0
-        ? "(input)"
-        : issue.path.map((p) => String(p)).join(".");
-      return `invalid argument \`${path}\`: ${issue.message}`;
-    })
-    .join("; ");
+/**
+ * A validation failure as a typed `InvalidArgument` (v7: it crosses the
+ * wire as that variant, so the host — and an HTTP face — sees a real
+ * 400-equivalent). The error names the FIRST failing field; when several
+ * fields fail, the detail lists every issue, each naming its field.
+ */
+function invalidArguments(error: z.ZodError): InvalidArgumentError {
+  const issues = error.issues.map((issue) => ({
+    path: issue.path.length === 0
+      ? "(input)"
+      : issue.path.map((p) => String(p)).join("."),
+    message: issue.message,
+  }));
+  const detail = issues.length === 1
+    ? issues[0].message
+    : issues.map((i) => `\`${i.path}\`: ${i.message}`).join("; ");
+  return new InvalidArgumentError(issues[0].path, detail);
 }
 
 /**
@@ -311,7 +322,7 @@ export function endpoint<S extends z.ZodObject>(
       coerced[name] = coerceValue(name, value, derivation.props.get(name));
     }
     const parsed = input.safeParse(coerced);
-    if (!parsed.success) throw new Error(renderIssues(parsed.error));
+    if (!parsed.success) throw invalidArguments(parsed.error);
     return await handler(parsed.data as z.output<S>);
   };
   return new EndpointDef(validating, iri, { ...rest, id, args: [...specs] });

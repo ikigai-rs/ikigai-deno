@@ -4,12 +4,8 @@
  * Terminal A:
  *
  * ```sh
- * deno run -A examples/demo.ts [socket-path] [--verbatim]
+ * deno run -A examples/demo.ts [socket-path]
  * ```
- *
- * `--verbatim` changes the LEGACY default to unstripped entry patterns
- * (`urn:ts:hello` as-is) — only <= v5 clients need it; a v6 host's hello
- * says which form it wants, per connection.
  *
  * Terminal B:
  *
@@ -19,6 +15,11 @@
  * ikigai --mount urn:ts:=<socket-path> -c list
  * # …urn:ts:hello  → hello   [<socket-path>]
  * ```
+ *
+ * Both mount styles (alias `--mount`, verbatim `--override`/`--prefer`)
+ * list correctly against the same server: the host's hello states its mode
+ * per connection (and since wire v7 the hello is required, so there is no
+ * legacy default left to configure).
  */
 
 import { defaultSocketPath } from "../src/client.ts";
@@ -48,18 +49,15 @@ export const shout = endpoint("urn:ts:shout", {
 }, (args) => `${String(args["in"]).toUpperCase()}!`);
 
 if (import.meta.main) {
-  const stripAlias = !Deno.args.includes("--verbatim");
-  const rest = Deno.args.filter((a) => a !== "--verbatim");
-  const path = rest[0] ??
+  const path = Deno.args[0] ??
     defaultSocketPath().replace(/kernel\.sock$/, "ts.sock");
   console.error(
     `ikigai-deno demo: serving urn:ts:hello, urn:ts:shout on ${path}`,
   );
-  const mountFlag = stripAlias ? "--mount" : "--prefer";
   console.error(
-    `try:  ikigai ${mountFlag} urn:ts:=${path} -c 'source urn:ts:hello who=Ada'`,
+    `try:  ikigai --mount urn:ts:=${path} -c 'source urn:ts:hello who=Ada'`,
   );
-  const server = new Server([hello, shout], path, { stripAlias });
+  const server = new Server([hello, shout], path);
   Deno.addSignalListener("SIGINT", () => {
     server.shutdown();
   });

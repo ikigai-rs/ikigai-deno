@@ -1,4 +1,8 @@
-/** The wire v6 hello: codec golden bytes, mismatch errors, both tolerances. */
+/**
+ * The wire hello: codec golden bytes, mismatch errors, and the v7 postures —
+ * pre-hello peers are REFUSED with a diagnosis (the v6 tolerances are gone),
+ * and a silent server is reported as hung, never misdiagnosed as ancient.
+ */
 
 import {
   assert,
@@ -14,7 +18,7 @@ import {
   HelloMode,
   ProtocolError,
 } from "../src/wire.ts";
-import { connect } from "../src/client.ts";
+import { connect, ConnectionLost } from "../src/client.ts";
 import { endpoint, Server } from "../src/serve.ts";
 
 const utf8 = new TextEncoder();
@@ -92,60 +96,69 @@ Deno.test("a version mismatch names both versions", async () => {
   })();
   const err = await assertRejects(() => connect(path), ProtocolError);
   assertMatch(err.message, /v9/);
-  assertMatch(err.message, /v6/);
+  assertMatch(err.message, /v7/);
   await server;
   listener.close();
   Deno.removeSync(dir, { recursive: true });
 });
 
-Deno.test("a new client falls back against a pre-hello server", async () => {
-  // A <= v5 RUST server drops an undecodable frame SILENTLY; the client
-  // must reconnect without the hello (warning loudly) and still work.
+Deno.test("a pre-hello server is diagnosed, not tolerated", async () => {
+  // v7: a <= v5 Rust server drops the undecodable hello frame silently —
+  // that hang-UP is the pre-v6 signature, and the client refuses with the
+  // diagnosis instead of the v6 legacy reconnect.
   const dir = tempSocketDir();
   const path = `${dir}/hello.sock`;
   const listener = Deno.listen({ transport: "unix", path });
   const server = (async () => {
-    // First connection: read the hello, cannot decode it, hang up.
-    let conn = await listener.accept();
-    let stream = new FrameStream(conn);
-    await stream.readFrame();
-    conn.close();
-    // Second connection: legacy service, straight Calls.
-    conn = await listener.accept();
-    stream = new FrameStream(conn);
-    try {
-      while (true) {
-        const call = wire.decodeCall(await stream.readFrame());
-        const reply: wire.Reply = call.kind === "entries"
-          ? { kind: "entries", entries: [] }
-          : { kind: "error", message: "endpoint error: not in this test" };
-        await stream.writeFrame(wire.encodeReply(reply));
-      }
-    } catch {
-      // client hung up
-    } finally {
-      conn.close();
-    }
+    const conn = await listener.accept();
+    const stream = new FrameStream(conn);
+    await stream.readFrame(); // cannot decode it as a Call…
+    conn.close(); // …hang up silently, the <= v5 way
   })();
-  const [, stderr] = await withStderr(async () => {
-    const k = await connect(path);
-    assertStrictEquals(
-      k.serverVersion,
-      null,
-      "the fallback marks the server legacy",
-    );
-    assertEquals(await k.entries(), []);
-    k.close();
-  });
-  assert(stderr.includes("predates wire v6"), stderr);
+  const err = await assertRejects(() => connect(path), ProtocolError);
+  assert(err.message.includes("predates wire v6"), err.message);
+  assert(err.message.includes("v7"), err.message);
   await server;
   listener.close();
   Deno.removeSync(dir, { recursive: true });
 });
 
-Deno.test("a legacy client without a hello is still served", async () => {
-  // A <= v5 client's first frame is a Call; the server serves it (warning)
-  // under its configured default entries form.
+Deno.test("a silent server is reported as hung, not ancient", async () => {
+  // The misdiagnosis the Rust hung-server tests caught: silence on the
+  // hello is a HANG (overload), not proof of age. Bounded by the timeout.
+  const dir = tempSocketDir();
+  const path = `${dir}/hello.sock`;
+  const listener = Deno.listen({ transport: "unix", path });
+  const server = (async () => {
+    const conn = await listener.accept();
+    const stream = new FrameStream(conn);
+    try {
+      await stream.readFrame(); // the hello…
+      await stream.readFrame(); // …hold the line, answer NOTHING
+    } catch {
+      // the client's timeout closed the connection
+    } finally {
+      try {
+        conn.close();
+      } catch {
+        // already closed
+      }
+    }
+  })();
+  const err = await assertRejects(
+    () => connect(path, { timeoutMs: 250 }),
+    ConnectionLost,
+  );
+  assert(err.message.includes("hung or overloaded"), err.message);
+  assert(!err.message.includes("predates"), err.message);
+  listener.close();
+  await server;
+  Deno.removeSync(dir, { recursive: true });
+});
+
+Deno.test("a pre-hello client is refused", async () => {
+  // v7: a <= v5 client's first frame is a Call; the server hangs up with a
+  // stderr diagnosis instead of serving it (the v6 tolerance is over).
   const hi = endpoint(
     "urn:ts:hi",
     { summary: "hi", args: ["who"] },
@@ -159,11 +172,11 @@ Deno.test("a legacy client without a hello is still served", async () => {
     const conn = await Deno.connect({ transport: "unix", path });
     const stream = new FrameStream(conn);
     await stream.writeFrame(wire.encodeCall({ kind: "entries" }));
-    const reply = wire.decodeReply(await stream.readFrame());
-    assert(reply.kind === "entries" && reply.entries !== null);
-    assertEquals(reply.entries.map((e) => e.pattern), ["urn:hi"]);
+    // The server must close without answering.
+    await assertRejects(() => stream.readFrame(), EofError);
     conn.close();
   });
+  assert(stderr.includes("refused"), stderr);
   assert(stderr.includes("without the version hello"), stderr);
   server.shutdown();
   await serving;

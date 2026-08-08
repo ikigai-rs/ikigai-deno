@@ -22,8 +22,17 @@
  * `urn:ts:hello` to `urn:hello` before forwarding, and re-prefixes catalog
  * patterns coming back. This server therefore answers BOTH the declared IRI
  * and its alias-stripped form. Since wire v6 the client's hello says which
- * form its `entries` wants, per connection; `stripAlias` remains only as the
- * default for legacy (<= v5) clients that cannot say.
+ * form its `entries` wants, per connection — and since v7 the hello is
+ * REQUIRED (a first frame without it is refused), so every served
+ * connection's form is known, never guessed.
+ *
+ * **Failures cross typed** (wire v7): an unknown IRI is a real `Unresolved`,
+ * a missing required argument a `MissingArgument`, a zod validation failure
+ * an `InvalidArgument` naming the field, a handler throw an `Endpoint` — and
+ * a handler may throw the typed classes (`NotFoundError`, `DeniedError`,
+ * `TimeoutError`, `UnavailableError`, …) to cross as that variant, so a Deno
+ * peer can answer a real 404-equivalent the host recognizes without message
+ * sniffing.
  *
  * **Security posture**: the socket is `0600` in a `0700` directory. Deno
  * exposes no SO_PEERCRED / LOCAL_PEERCRED equivalent, so unlike the Rust and
@@ -41,11 +50,13 @@ import {
   CacheStatus,
   Expiry,
   FrameStream,
+  InvalidArgumentError,
   type Reply,
   Representation,
   type Request,
   type SpaceEntry,
   spaceEntry,
+  toWireFailure,
   type TraceEvent,
   Verb,
   verbName,
@@ -319,8 +330,9 @@ function decodeArg(name: string, arg: wire.ArgRef): string | Uint8Array {
   // A peer has no back-channel to the host to dereference a Reference or
   // fetch a Content id — fail loud rather than hand the handler an IRI
   // pretending to be a value.
-  throw new Error(
-    `argument \`${name}\` arrived by reference; this peer only takes inline values`,
+  throw new InvalidArgumentError(
+    name,
+    "arrived by reference; this peer only takes inline values",
   );
 }
 
@@ -352,9 +364,10 @@ export class Space {
   }
 
   /**
-   * `stripAlias === null` uses the server's configured default; a v6
-   * connection overrides it per its hello mode, which is what retires the
-   * guessing (a peer finally KNOWS how its mounter addresses it).
+   * `stripAlias === null` uses the space's configured default (direct
+   * programmatic use); a served connection always passes its hello mode —
+   * since v7 the hello is required, so the form is KNOWN per connection,
+   * never guessed.
    */
   entries(stripAlias: boolean | null = null): SpaceEntry[] {
     const strip = stripAlias === null ? this.stripAlias : stripAlias;
@@ -406,11 +419,11 @@ export class Space {
   async #resolve(request: Request): Promise<Reply> {
     const d = this.#byTarget.get(request.target);
     if (d === undefined) {
-      // Exactly the Rust Error::Unresolved rendering, so the host-side
-      // engine reports it natively.
+      // A real Unresolved (v7): the host-side client rebuilds the same
+      // variant — and the same rendering — the Rust kernel would produce.
       return {
-        kind: "error",
-        message: `no endpoint resolved for ${request.target}`,
+        kind: "errorTyped",
+        failure: { kind: "unresolved", iri: request.target },
       };
     }
     if (request.verb === Verb.Meta) return this.#meta(d, request);
@@ -423,9 +436,12 @@ export class Space {
     }
     if (request.verb !== Verb.Source) {
       return {
-        kind: "error",
-        message: `endpoint error: verb ${verbName(request.verb)} is not ` +
-          `supported by \`${d.id}\` (a single-verb Source endpoint)`,
+        kind: "errorTyped",
+        failure: {
+          kind: "endpoint",
+          message: `verb ${verbName(request.verb)} is not ` +
+            `supported by \`${d.id}\` (a single-verb Source endpoint)`,
+        },
       };
     }
     return await this.#invoke(d, request);
@@ -438,17 +454,14 @@ export class Space {
         try {
           args[arg.name] = decodeArg(arg.name, request.args[arg.name]);
         } catch (e) {
-          return {
-            kind: "error",
-            message: `endpoint error: ${(e as Error).message}`,
-          };
+          return { kind: "errorTyped", failure: toWireFailure(e) };
         }
       } else if (arg.default !== null) {
         args[arg.name] = arg.default;
       } else if (arg.required) {
         return {
-          kind: "error",
-          message: `missing required argument \`${arg.name}\``,
+          kind: "errorTyped",
+          failure: { kind: "missingArgument", name: arg.name },
         };
       }
     }
@@ -456,9 +469,10 @@ export class Space {
     try {
       result = await d.handler(args);
     } catch (e) {
-      // A handler bug crosses as an endpoint error — never a hang.
-      const message = e instanceof Error ? e.message : String(e);
-      return { kind: "error", message: `endpoint error: ${message}` };
+      // A handler failure crosses typed, never as a hang: the typed classes
+      // map to their own taxonomy variants (a thrown NotFoundError IS a
+      // NotFound on the host); anything else is an Endpoint error.
+      return { kind: "errorTyped", failure: toWireFailure(e) };
     }
     return this.#representation(d, result);
   }
@@ -513,9 +527,11 @@ export class Space {
       );
     } else {
       return {
-        kind: "error",
-        message:
-          `endpoint error: meta renderer does not support target \`${target}\``,
+        kind: "errorTyped",
+        failure: {
+          kind: "endpoint",
+          message: `meta renderer does not support target \`${target}\``,
+        },
       };
     }
     return {
@@ -530,16 +546,6 @@ export class Space {
 // The socket server
 // ---------------------------------------------------------------------------
 
-export interface ServerOptions {
-  /**
-   * The entries form for connections that did not say (legacy <= v5
-   * clients): `true` lists alias-stripped patterns (what an alias `--mount`
-   * needs), `false` verbatim (what `--override`/`--prefer` need). A v6
-   * client's hello mode overrides this per connection.
-   */
-  stripAlias?: boolean;
-}
-
 /**
  * A wire server for a set of endpoints. `serve()` blocks until
  * {@linkcode Server.shutdown} is called (from another task, or via
@@ -552,12 +558,8 @@ export class Server {
   #conns = new Set<Deno.UnixConn>();
   #closing = false;
 
-  constructor(
-    endpoints: readonly EndpointDef[],
-    path: string,
-    options: ServerOptions = {},
-  ) {
-    this.space = new Space(endpoints, { stripAlias: options.stripAlias });
+  constructor(endpoints: readonly EndpointDef[], path: string) {
+    this.space = new Space(endpoints);
     this.path = path;
     const slash = path.lastIndexOf("/");
     if (slash > 0) {
@@ -604,14 +606,12 @@ export class Server {
 
   async #handle(conn: Deno.UnixConn): Promise<void> {
     const stream = new FrameStream(conn);
-    // The FIRST frame decides the connection's era (wire v6): a hello is
-    // answered with ours — equal versions proceed (and its mode picks this
-    // connection's entries form), unequal versions get the answer (so the
-    // client names both in its error) and a close. A frame WITHOUT the
-    // magic is a <= v5 client's first Call: served under the server's
-    // configured default, with a warning — the one-version tolerance
-    // removed at v7.
-    let stripAlias: boolean | null = null;
+    // The FIRST frame must be the hello (wire v7): it is answered with ours
+    // — equal versions proceed (and its mode picks this connection's
+    // entries form), unequal versions get the answer (so the client names
+    // both in its error) and a close. A frame WITHOUT the magic is a
+    // pre-v6 client; it is REFUSED (the v6 serve-it-anyway tolerance is
+    // over — this fleet updates together).
     let first: Uint8Array;
     try {
       first = await stream.readFrame();
@@ -619,26 +619,25 @@ export class Server {
       return;
     }
     const hello = wire.decodeHello(first);
-    if (hello !== null) {
-      try {
-        await stream.writeFrame(
-          wire.encodeHello(wire.hello(wire.PROTOCOL_VERSION)),
-        );
-      } catch {
-        return;
-      }
-      if (hello.version !== wire.PROTOCOL_VERSION) {
-        return; // the client renders the mismatch
-      }
-      stripAlias = hello.mode === wire.HelloMode.Alias;
-    } else {
+    if (hello === null) {
       console.error(
-        "ikigai-deno: a client connected without the version hello " +
-          "(wire <= v5) — served in legacy mode (tolerated until v7). " +
+        "ikigai-deno: refused a client that connected without the version " +
+          `hello (wire <= v5; v${wire.PROTOCOL_VERSION} requires it). ` +
           "Update the client.",
       );
-      if (!(await this.#serveOneFrame(stream, first, stripAlias))) return;
+      return;
     }
+    try {
+      await stream.writeFrame(
+        wire.encodeHello(wire.hello(wire.PROTOCOL_VERSION)),
+      );
+    } catch {
+      return;
+    }
+    if (hello.version !== wire.PROTOCOL_VERSION) {
+      return; // the client renders the mismatch
+    }
+    const stripAlias = hello.mode === wire.HelloMode.Alias;
     while (true) {
       let frame: Uint8Array;
       try {
@@ -654,7 +653,7 @@ export class Server {
   async #serveOneFrame(
     stream: FrameStream,
     frame: Uint8Array,
-    stripAlias: boolean | null,
+    stripAlias: boolean,
   ): Promise<boolean> {
     let call: wire.Call;
     try {
@@ -666,8 +665,8 @@ export class Server {
       try {
         await stream.writeFrame(
           wire.encodeReply({
-            kind: "error",
-            message: `endpoint error: ${message}`,
+            kind: "errorTyped",
+            failure: { kind: "endpoint", message },
           }),
         );
       } catch {
@@ -717,9 +716,8 @@ export class Server {
 export async function serve(
   endpoints: readonly EndpointDef[],
   path: string,
-  options: ServerOptions = {},
 ): Promise<void> {
-  const server = new Server(endpoints, path, options);
+  const server = new Server(endpoints, path);
   try {
     await server.serve();
   } finally {

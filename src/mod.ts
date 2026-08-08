@@ -36,16 +36,25 @@ export {
   Capability,
   content,
   decodeErrorMessage,
+  DeniedError,
   EndpointError,
   EofError,
   Expiry,
   HelloMode,
   inline,
+  InvalidArgumentError,
   MAX_FRAME,
+  MissingArgumentError,
+  NotFoundError,
   PROTOCOL_VERSION,
   ProtocolError,
   reference,
   Representation,
+  TimeoutError,
+  toWireFailure,
+  typedError,
+  UnavailableError,
+  UnresolvedError,
   Verb,
   WireError,
 } from "./wire.ts";
@@ -61,6 +70,7 @@ export type {
   SpaceEntry,
   TraceContext,
   TraceEvent,
+  WireFailure,
 } from "./wire.ts";
 
 export {
@@ -87,5 +97,4 @@ export type {
   Handler,
   HandlerArgs,
   HandlerResult,
-  ServerOptions,
 } from "./serve.ts";

@@ -1,8 +1,8 @@
 /**
- * The ikigai IPC wire protocol: types, postcard codec, framing, and the v6
- * hello.
+ * The ikigai IPC wire protocol: types, postcard codec, framing, the hello,
+ * and the typed error taxonomy.
  *
- * Mirrors `ikigai-wire` (Rust) at `PROTOCOL_VERSION` 6. The codec is
+ * Mirrors `ikigai-wire` (Rust) at `PROTOCOL_VERSION` 7. The codec is
  * non-self-describing, so every type here restates a Rust layout
  * field-for-field; the Rust declaration is the normative source
  * (`ikigai-wire/src/lib.rs` and the `ikigai-core` types it serializes), and
@@ -18,9 +18,15 @@
  * whose version is being negotiated must not be needed to negotiate it), and
  * readers ignore trailing bytes — that is the extension mechanism. A version
  * mismatch is a clean error naming both sides instead of garbled postcard.
- * Pre-v6 peers are tolerated for one version: a server hung up on our hello
- * means a <= v5 Rust server (reconnect without the hello, warn), and a first
- * frame without the magic means a <= v5 client (serve it, warn).
+ * **Since v7 the hello is REQUIRED**: the v6 one-version tolerances (a client
+ * reconnecting without the hello, a server serving a first frame without the
+ * magic) are gone. A v6 peer still fails cleanly — the hello exchange itself
+ * names both versions; only pre-v6 peers fail without explanation.
+ *
+ * v7 also adds `Reply::ErrorTyped`: the error TAXONOMY crosses the wire (see
+ * {@linkcode WireFailure}), so a remote denial stays a permanent denial and a
+ * remote timeout stays transient, instead of every failure flattening to one
+ * string.
  */
 
 import { DecodeError, Reader, Writer } from "./postcard.ts";
@@ -28,9 +34,11 @@ import { DecodeError, Reader, Writer } from "./postcard.ts";
 /**
  * Bumped in lockstep with the Rust `ikigai_wire::PROTOCOL_VERSION`. v5 era:
  * core 0.1.48 `TraceEvent.notes` changed the postcard layout of traced
- * replies. v6 adds the hello exchange (version + mount mode at open).
+ * replies. v6 adds the hello exchange (version + mount mode at open). v7 adds
+ * `Reply::ErrorTyped` (the error taxonomy crosses, not a flat string) and
+ * removes the v6 tolerances: the hello is required on both sides.
  */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 /**
  * The magic prefix of a hello payload; a first frame without it is a legacy
@@ -55,14 +63,94 @@ export class WireError extends Error {
 }
 
 /**
- * A frame or message that violates wire protocol v6 — including a peer
+ * A frame or message that violates the wire protocol — including a peer
  * speaking a different version whose messages do not decode (the hello
  * usually catches that first and names both versions).
  */
 export class ProtocolError extends WireError {}
 
-/** A server-reported resolution failure (the wire's `Reply::Error`). */
-export class EndpointError extends WireError {}
+/**
+ * A server-reported resolution failure. Since wire v7 the taxonomy crosses
+ * the wire (`Reply::ErrorTyped`), so most failures arrive as one of the
+ * subclasses below; a bare `EndpointError` is the `Endpoint` variant (a
+ * handler failure), an unknown-future variant, or a legacy flat
+ * `Reply::Error` string.
+ *
+ * `transient` mirrors `ikigai_core::Error::is_transient()`: `true` only for
+ * {@linkcode TimeoutError} and {@linkcode UnavailableError} — re-issuing
+ * might succeed. Permanent failures (denied, not found, bad arguments) stay
+ * `false`: retrying will not conjure the resource or the grant.
+ */
+export class EndpointError extends WireError {
+  readonly transient: boolean = false;
+}
+
+/**
+ * The kernel found no binding for the target IRI (`WireFailure` /
+ * `ikigai_core::Error::Unresolved`). Distinct from {@linkcode NotFoundError}:
+ * this is the KERNEL having nothing bound there, not a bound endpoint
+ * reporting the fronted thing absent.
+ */
+export class UnresolvedError extends EndpointError {
+  readonly iri: string;
+
+  constructor(iri: string) {
+    super(`no endpoint resolved for ${iri}`);
+    this.iri = iri;
+  }
+}
+
+/** A required argument was absent (`Error::MissingArgument`). */
+export class MissingArgumentError extends EndpointError {
+  readonly argument: string;
+
+  constructor(argument: string) {
+    super(`missing required argument \`${argument}\``);
+    this.argument = argument;
+  }
+}
+
+/** An argument was present but unusable (`Error::InvalidArgument`). */
+export class InvalidArgumentError extends EndpointError {
+  readonly argument: string;
+  readonly detail: string;
+
+  constructor(argument: string, detail: string) {
+    super(`invalid argument \`${argument}\`: ${detail}`);
+    this.argument = argument;
+    this.detail = detail;
+  }
+}
+
+/**
+ * The capability did not authorize the operation (`Error::Denied`) — a
+ * **permanent** denial. A failover must not paper over it with a weaker
+ * local answer; an HTTP face says 403.
+ */
+export class DeniedError extends EndpointError {}
+
+/**
+ * A bound endpoint reports the fronted thing absent (`Error::NotFound`) —
+ * **permanent**; an HTTP face says 404.
+ */
+export class NotFoundError extends EndpointError {}
+
+/**
+ * The remote operation exceeded its time budget (`Error::Timeout`) —
+ * **transient**; retry/failover overlays may act. (This is the SERVER's
+ * endpoint timing out; the client's own read deadline is `ConnectionLost`.)
+ */
+export class TimeoutError extends EndpointError {
+  override readonly transient: boolean = true;
+}
+
+/**
+ * A dependency or transport behind the server is unavailable
+ * (`Error::Unavailable`) — **transient**, like {@linkcode TimeoutError}.
+ */
+export class UnavailableError extends EndpointError {
+  override readonly transient: boolean = true;
+}
 
 /** A clean or mid-frame connection close while reading a frame. */
 export class EofError extends WireError {}
@@ -334,6 +422,94 @@ export type Call =
     readonly context: TraceContext;
   };
 
+/**
+ * The error taxonomy on the wire — a field-for-field mirror of the Rust
+ * `ikigai_wire::WireError` enum (named `WireFailure` here because
+ * `WireError` is already this package's base error class). Wire-local on
+ * purpose: this codec is a public ABI with independent implementations, so a
+ * taxonomy addition is a WIRE VERSION event, not a silent core cascade.
+ * Variant order is the postcard contract — append only:
+ * unresolved=0, missingArgument=1, invalidArgument=2, endpoint=3, denied=4,
+ * notFound=5, timeout=6, unavailable=7.
+ */
+export type WireFailure =
+  | { readonly kind: "unresolved"; readonly iri: string }
+  | { readonly kind: "missingArgument"; readonly name: string }
+  | {
+    readonly kind: "invalidArgument";
+    readonly name: string;
+    readonly detail: string;
+  }
+  | { readonly kind: "endpoint"; readonly message: string }
+  | { readonly kind: "denied"; readonly message: string }
+  | { readonly kind: "notFound"; readonly message: string }
+  | { readonly kind: "timeout"; readonly message: string }
+  | { readonly kind: "unavailable"; readonly message: string };
+
+/**
+ * Rebuild the typed error a {@linkcode WireFailure} carries — the client's
+ * side of `impl From<WireError> for ikigai_core::Error`. The variant (and so
+ * `transient`) survives the wire; the message renders the way the Rust
+ * kernel would.
+ */
+export function typedError(failure: WireFailure): EndpointError {
+  switch (failure.kind) {
+    case "unresolved":
+      return new UnresolvedError(failure.iri);
+    case "missingArgument":
+      return new MissingArgumentError(failure.name);
+    case "invalidArgument":
+      return new InvalidArgumentError(failure.name, failure.detail);
+    case "endpoint":
+      return new EndpointError(failure.message);
+    case "denied":
+      return new DeniedError(failure.message);
+    case "notFound":
+      return new NotFoundError(failure.message);
+    case "timeout":
+      return new TimeoutError(failure.message);
+    case "unavailable":
+      return new UnavailableError(failure.message);
+  }
+}
+
+/**
+ * The server's side of `impl From<&ikigai_core::Error> for WireError`: what
+ * a thrown error crosses the wire as. The typed subclasses map to their own
+ * variants (so a Deno handler can throw `NotFoundError` and the host sees a
+ * real NotFound); anything else degrades to the `endpoint` variant with its
+ * message preserved — exactly the Rust fallback for unknown variants.
+ */
+export function toWireFailure(error: unknown): WireFailure {
+  if (error instanceof UnresolvedError) {
+    return { kind: "unresolved", iri: error.iri };
+  }
+  if (error instanceof MissingArgumentError) {
+    return { kind: "missingArgument", name: error.argument };
+  }
+  if (error instanceof InvalidArgumentError) {
+    return {
+      kind: "invalidArgument",
+      name: error.argument,
+      detail: error.detail,
+    };
+  }
+  if (error instanceof DeniedError) {
+    return { kind: "denied", message: error.message };
+  }
+  if (error instanceof NotFoundError) {
+    return { kind: "notFound", message: error.message };
+  }
+  if (error instanceof TimeoutError) {
+    return { kind: "timeout", message: error.message };
+  }
+  if (error instanceof UnavailableError) {
+    return { kind: "unavailable", message: error.message };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return { kind: "endpoint", message };
+}
+
 export type Reply =
   | {
     readonly kind: "resolved";
@@ -346,12 +522,28 @@ export type Reply =
     readonly kind: "entries";
     readonly entries: readonly SpaceEntry[] | null;
   }
-  | { readonly kind: "error"; readonly message: string }
+  | {
+    /**
+     * The flat pre-v7 error string. Still decodable (discriminants are
+     * append-only) but a v7 server never sends it.
+     */
+    readonly kind: "error";
+    readonly message: string;
+  }
   | {
     readonly kind: "resolvedTraced";
     readonly representation: Representation;
     readonly cacheStatus: CacheStatus;
     readonly events: readonly TraceEvent[];
+  }
+  | {
+    /**
+     * A failure with its taxonomy intact (v7) — how a v7+ server answers
+     * failures. The client rebuilds the same variant the server saw via
+     * {@linkcode typedError}.
+     */
+    readonly kind: "errorTyped";
+    readonly failure: WireFailure;
   };
 
 // ---------------------------------------------------------------------------
@@ -448,6 +640,44 @@ function putSpaceEntry(out: Writer, entry: SpaceEntry): void {
   }
 }
 
+function putWireFailure(out: Writer, failure: WireFailure): void {
+  switch (failure.kind) {
+    case "unresolved":
+      out.varint(0);
+      out.string(failure.iri);
+      break;
+    case "missingArgument":
+      out.varint(1);
+      out.string(failure.name);
+      break;
+    case "invalidArgument":
+      out.varint(2);
+      out.string(failure.name);
+      out.string(failure.detail);
+      break;
+    case "endpoint":
+      out.varint(3);
+      out.string(failure.message);
+      break;
+    case "denied":
+      out.varint(4);
+      out.string(failure.message);
+      break;
+    case "notFound":
+      out.varint(5);
+      out.string(failure.message);
+      break;
+    case "timeout":
+      out.varint(6);
+      out.string(failure.message);
+      break;
+    case "unavailable":
+      out.varint(7);
+      out.string(failure.message);
+      break;
+  }
+}
+
 function putTraceEvent(out: Writer, event: TraceEvent): void {
   out.string(event.target);
   out.string(event.thread);
@@ -533,6 +763,10 @@ export function encodeReply(reply: Reply): Uint8Array {
       out.varint(reply.events.length);
       for (const event of reply.events) putTraceEvent(out, event);
       break;
+    case "errorTyped":
+      out.varint(5);
+      putWireFailure(out, reply.failure);
+      break;
   }
   return out.finish();
 }
@@ -614,6 +848,39 @@ function getSpaceEntry(r: Reader): SpaceEntry {
   const endpoint = r.string();
   const origin = r.option() ? r.string() : null;
   return { pattern, endpoint, origin };
+}
+
+function getWireFailure(r: Reader): WireFailure {
+  const variant = r.varint(32);
+  switch (variant) {
+    case 0:
+      return { kind: "unresolved", iri: r.string() };
+    case 1:
+      return { kind: "missingArgument", name: r.string() };
+    case 2:
+      return { kind: "invalidArgument", name: r.string(), detail: r.string() };
+    case 3:
+      return { kind: "endpoint", message: r.string() };
+    case 4:
+      return { kind: "denied", message: r.string() };
+    case 5:
+      return { kind: "notFound", message: r.string() };
+    case 6:
+      return { kind: "timeout", message: r.string() };
+    case 7:
+      return { kind: "unavailable", message: r.string() };
+    default:
+      // The taxonomy is append-only, and every existing variant carries its
+      // message as a leading string; read it so an unknown FUTURE variant
+      // degrades to a named base error instead of an opaque decode failure.
+      // (A future variant with a different payload shape still fails loud as
+      // a ProtocolError — the hello makes that unreachable in practice.)
+      return {
+        kind: "endpoint",
+        message: `wire error variant ${variant} (newer than protocol ` +
+          `v${PROTOCOL_VERSION}): ${r.string()}`,
+      };
+  }
 }
 
 function getTraceEvent(r: Reader): TraceEvent {
@@ -720,6 +987,8 @@ export function decodeReply(payload: Uint8Array): Reply {
       const count = r.varint();
       for (let i = 0; i < count; i++) events.push(getTraceEvent(r));
       reply = { kind: "resolvedTraced", representation, cacheStatus, events };
+    } else if (variant === 5) {
+      reply = { kind: "errorTyped", failure: getWireFailure(r) };
     } else {
       throw versionMismatch("Reply", variant);
     }
