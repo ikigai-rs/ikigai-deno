@@ -11,10 +11,13 @@ after the codec became a versioned public ABI.
 A binding = client + servable peer space; the module mechanism IS
 mount-over-wire.
 
-Wire protocol version: **6** (`PROTOCOL_VERSION`) — the version (and mount mode)
+Wire protocol version: **7** (`PROTOCOL_VERSION`) — the version (and mount mode)
 cross the wire in a hello frame at connection open, so a mismatch is a clean
-error naming both sides, and a served peer finally _knows_ which entries form
-its mounter wants.
+error naming both sides, and a served peer _knows_ which entries form its
+mounter wants. Since v7 the hello is **required** (the v6 pre-hello tolerances
+are gone), and failures cross with their **taxonomy intact**: a remote denial
+arrives as `DeniedError`, a remote not-found as `NotFoundError`, a remote
+timeout as a `TimeoutError` with `transient === true` — not a flattened string.
 
 ## Install
 
@@ -59,14 +62,21 @@ Notes:
 - `connect(path, { capability: Capability.scoped([...]) })` sends requests as
   `Call::IssueAs` under that capability; the server clamps it to the principal
   the channel authenticated.
-- `k.serverVersion` is the version the server's hello declared — `null` when a
-  pre-v6 server was reached through the fallback (reconnect without the hello,
-  with a loud warning; the tolerance goes away at wire v7).
-- Errors surface as `EndpointError` carrying the server's error string
-  (`endpoint error:` prefix stripped, as the Rust wire clients do). A dead
-  socket raises `ConnectionLost`; a hung server trips the read deadline (default
-  300 s — long resolutions are silent, so silence is not proof of death; same
-  rationale as the Rust client).
+- `k.serverVersion` is the version the server's hello declared — since v7 always
+  a real number: the hello is required, and a peer that cannot speak it is
+  refused at connect with a diagnosis (a hang-UP on the hello = pre-v6; mere
+  SILENCE = hung/overloaded, bounded by the timeout — never misdiagnosed as
+  ancient).
+- Errors surface **typed** (wire v7): `UnresolvedError`, `MissingArgumentError`,
+  `InvalidArgumentError` (with `.argument`/`.detail`), `DeniedError`,
+  `NotFoundError`, `TimeoutError`, `UnavailableError` — all subclassing
+  `EndpointError`, all carrying `.transient` (`true` only for
+  timeout/unavailable, mirroring `ikigai_core::Error::is_transient`). Message
+  texts render the way the Rust kernel would. An unknown FUTURE taxonomy variant
+  degrades to the base `EndpointError`, naming the variant. A dead socket raises
+  `ConnectionLost`; a hung server trips the read deadline (default 300 s — long
+  resolutions are silent, so silence is not proof of death; same rationale as
+  the Rust client).
 - The client **reconnects**: after a `ConnectionLost`, the next call redials
   once (fresh hello, same mode) before failing — a restarted peer stops meaning
   failure-forever. A call is only ever retried when its SEND failed (the frame
@@ -125,7 +135,7 @@ What a served endpoint gets for free, because its describe face is real:
 - Meta faces: `text/turtle` (default — skolemized `ik:` graph, no blank nodes),
   `text/plain`, `application/json`.
 
-### The hello retires the entries guessing (v6)
+### The hello retires the entries guessing
 
 `--mount urn:ts:=<socket>` is an **alias** mount: the host rewrites
 `urn:ts:hello` → `urn:hello` before forwarding, and re-prefixes catalog patterns
@@ -133,8 +143,22 @@ coming back. An `--override`/`--prefer` mount forwards IRIs unchanged. Pre-v6, a
 served peer had to _guess_ which form `entries` should list; since v6 the
 mounter's hello says its mode, and this server answers each connection with the
 form that mounter wants — both mount styles list correctly against the same
-server, no flags. `stripAlias` (and the demo's `--verbatim`) only set the
-default for legacy (<= v5) clients that cannot say.
+server, no flags. Since v7 the hello is required, so there is no legacy default
+left to configure: a client that connects without it is refused with a stderr
+diagnosis.
+
+### Typed errors and the HTTP faces (v7)
+
+The taxonomy crossing the wire is what lets an HTTP face answer truthfully
+instead of 502-for-everything — the three example apps share one mapping
+(`examples/http_status.ts`): `DeniedError` → 403, `NotFoundError` → 404,
+`InvalidArgumentError`/`MissingArgumentError` → 400, transient
+(timeout/unavailable) → 503, anything else → 502. It also means a **served**
+Deno endpoint can speak the taxonomy: throw `NotFoundError`/`DeniedError`/
+`TimeoutError`/`UnavailableError` from a handler and it crosses as that variant
+— a Rust host's failover will treat your `UnavailableError` as transient and
+your `DeniedError` as final, and a zod validation failure crosses as a real
+`InvalidArgument` naming the field.
 
 ### zod → ArgSpec (declare the contract once)
 
@@ -174,15 +198,17 @@ on any contradiction.
 
 - Receive their declared args as an object (utf-8 strings; raw `Uint8Array` when
   not valid utf-8). By-reference arguments (`ArgRef::Reference` / `Content`) are
-  refused loudly: an L0 peer has no back-channel to the host to dereference
-  them. Handlers from the `./zod` rung instead receive the schema's parsed,
-  typed output.
+  refused loudly (as a typed `InvalidArgument`): an L0 peer has no back-channel
+  to the host to dereference them. Handlers from the `./zod` rung instead
+  receive the schema's parsed, typed output.
 - Return `string` or `Uint8Array` (typed by the endpoint's declared `output`), a
   `[value, mediaType]` tuple, or a full `Representation`. Async handlers are
   fine.
-- A thrown error crosses the wire as `endpoint error: …` — never a hang.
-- Missing required arguments are reported with the exact error text the Rust
-  kernel uses, so the host-side experience is native.
+- A thrown error crosses the wire typed, never as a hang: the typed classes map
+  to their own taxonomy variants; anything else crosses as an `Endpoint` error
+  with its message preserved.
+- Missing required arguments cross as a typed `MissingArgument`, rendering the
+  exact error text the Rust kernel uses, so the host-side experience is native.
 
 ## Security posture
 
@@ -204,13 +230,21 @@ record the layout. Highlights a public ABI document should state:
 - Framing: `u32` **big-endian** length +
   [postcard](https://postcard.jamesmunns.com) payload; 64 MiB frame cap, checked
   before allocation.
-- **The v6 hello**: first frame each way is
+- **The hello** (required since v7): first frame each way is
   `"IKWH" + u32 BE version + u8
   mode` (deliberately not postcard), trailing
   bytes ignored — that is the extension mechanism. Golden vector:
   `IKWH\x00\x00\x00\x06\x01` (v6, alias). Mismatch → clean error naming both
-  versions. One-version tolerances (client fallback without hello; serving a
-  legacy first frame) disappear at v7.
+  versions. The v6 one-version tolerances (client fallback without hello;
+  serving a legacy first frame) are GONE: a hang-up on the hello is diagnosed
+  pre-v6, silence is diagnosed as a hang, a magic-less first frame is refused.
+- **`Reply::ErrorTyped`** (v7): postcard discriminant **5**; payload is the
+  `WireError` enum in declaration order — `Unresolved(iri)`=0,
+  `MissingArgument(name)`=1, `InvalidArgument{name, detail}`=2 (two strings,
+  field order), `Endpoint(msg)`=3, `Denied(msg)`=4, `NotFound(msg)`=5,
+  `Timeout(msg)`=6, `Unavailable(msg)`=7. Append-only. Timeout and Unavailable
+  are the transient pair. The flat `Reply::Error`=3 remains decodable but a v7
+  server never sends it.
 - Enum discriminants are the **declaration index** as a varint — `Verb::Source`
   is `0` on the wire even though it is declared `#[repr(u8)] Source = 1` (those
   codes are only for identity hashing).

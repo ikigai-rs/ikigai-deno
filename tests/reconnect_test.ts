@@ -15,7 +15,13 @@ import {
   assertStrictEquals,
 } from "@std/assert";
 import * as wire from "../src/wire.ts";
-import { CacheStatus, FrameStream, HelloMode, Verb } from "../src/wire.ts";
+import {
+  CacheStatus,
+  DeniedError,
+  FrameStream,
+  HelloMode,
+  Verb,
+} from "../src/wire.ts";
 import { connect, ConnectionLost } from "../src/client.ts";
 import { endpoint, Server } from "../src/serve.ts";
 
@@ -49,7 +55,7 @@ Deno.test("a restarted server is redialed transparently", async () => {
     try {
       const rep = await k.source("urn:ts:hello", { who: "two" });
       assertStrictEquals(rep.text, "Hello, two!");
-      assertStrictEquals(k.serverVersion, 6, "the redial re-ran the hello");
+      assertStrictEquals(k.serverVersion, 7, "the redial re-ran the hello");
     } finally {
       second.shutdown();
       await secondServing;
@@ -101,7 +107,9 @@ Deno.test("a call cut mid-reply fails without replay; the NEXT call redials", as
       const conn = await listener.accept();
       const stream = new FrameStream(conn);
       await stream.readFrame(); // client hello
-      await stream.writeFrame(wire.encodeHello(wire.hello(6)));
+      await stream.writeFrame(
+        wire.encodeHello(wire.hello(wire.PROTOCOL_VERSION)),
+      );
       await stream.readFrame(); // the call…
       callsReceived += 1;
       conn.close(); // …cut before any reply
@@ -111,7 +119,9 @@ Deno.test("a call cut mid-reply fails without replay; the NEXT call redials", as
       const conn = await listener.accept();
       const stream = new FrameStream(conn);
       await stream.readFrame(); // client hello
-      await stream.writeFrame(wire.encodeHello(wire.hello(6)));
+      await stream.writeFrame(
+        wire.encodeHello(wire.hello(wire.PROTOCOL_VERSION)),
+      );
       const call = wire.decodeCall(await stream.readFrame());
       callsReceived += 1;
       assert(call.kind === "issue");
@@ -141,6 +151,45 @@ Deno.test("a call cut mid-reply fails without replay; the NEXT call redials", as
   } finally {
     k.close();
     listener.close();
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
+
+Deno.test("a redialed v7 server's typed errors cross typed", async () => {
+  // The redial replays the full v7 handshake; the fresh connection then
+  // answers with ErrorTyped, and the taxonomy still crosses — a restarted
+  // peer's denial is a real DeniedError, not a flattened string.
+  const dir = Deno.makeTempDirSync({ prefix: "ik-deno-reconnect-" });
+  const path = `${dir}/typed.sock`;
+  const first = new Server(makeEndpoints(), path);
+  const firstServing = first.serve();
+  const k = await connect(path);
+  try {
+    assertStrictEquals(
+      (await k.source("urn:ts:hello", { who: "one" })).text,
+      "Hello, one!",
+    );
+    first.shutdown();
+    await firstServing;
+    const gated = endpoint("urn:ts:hello", { summary: "now gated" }, () => {
+      throw new DeniedError("needs urn:cap:x");
+    });
+    const second = new Server([gated], path);
+    const secondServing = second.serve();
+    try {
+      const err = await assertRejects(
+        () => k.source("urn:ts:hello", { who: "two" }), // redials first
+        DeniedError,
+        "needs urn:cap:x",
+      );
+      assertStrictEquals(err.transient, false);
+      assertStrictEquals(k.serverVersion, 7, "the redial re-ran the hello");
+    } finally {
+      second.shutdown();
+      await secondServing;
+    }
+  } finally {
+    k.close();
     Deno.removeSync(dir, { recursive: true });
   }
 });
@@ -203,7 +252,9 @@ Deno.test("entries answers an empty array when the space cannot enumerate", asyn
     const conn = await listener.accept();
     const stream = new FrameStream(conn);
     await stream.readFrame(); // client hello
-    await stream.writeFrame(wire.encodeHello(wire.hello(6)));
+    await stream.writeFrame(
+      wire.encodeHello(wire.hello(wire.PROTOCOL_VERSION)),
+    );
     await stream.readFrame(); // the entries call
     // The wire's "this space does not support enumeration" answer.
     await stream.writeFrame(

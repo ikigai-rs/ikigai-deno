@@ -28,6 +28,7 @@ import {
   EndpointError,
   type Representation,
 } from "../src/mod.ts";
+import { httpStatus } from "./http_status.ts";
 
 export function socketPath(): string {
   return Deno.env.get("IKIGAI_SOCKET") ?? defaultSocketPath();
@@ -106,8 +107,12 @@ export async function createApp(
   });
 
   app.onError((err, c) => {
-    // The peer answered with an error: a bad gateway, carrying its message.
-    if (err instanceof EndpointError) return c.text(err.message, 502);
+    // The peer's error arrives TYPED (wire v7), so the status is truthful:
+    // a remote denial is a 403, a remote not-found a 404, bad input a 400,
+    // a transient failure a 503 — not a blanket 502.
+    if (err instanceof EndpointError) {
+      return c.text(err.message, httpStatus(err));
+    }
     if (err instanceof ConnectionLost) {
       return c.text(`${err.message} — is the peer running?`, 503);
     }

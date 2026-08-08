@@ -2,43 +2,57 @@
  * Integration against the installed Rust host, both directions.
  *
  * Skips cleanly when the `ikigai` binary is absent (CI has no Rust host;
- * these run locally against `~/.cargo/bin/ikigai`).
+ * these run locally against `~/.cargo/bin/ikigai`). The binary's wire
+ * version is PROBED first: a v7 binary runs the full suite; an older (v6)
+ * binary runs the MISMATCH suite instead — v7 removed the tolerances, so
+ * the correct cross-version behavior is a clean error naming both versions,
+ * and that is what gets asserted.
  */
 
 import { assert, assertEquals, assertStrictEquals } from "@std/assert";
-import { CacheStatus, EndpointError } from "../src/wire.ts";
+import {
+  CacheStatus,
+  PROTOCOL_VERSION,
+  ProtocolError,
+  UnresolvedError,
+} from "../src/wire.ts";
 import { connect } from "../src/client.ts";
 import { endpoint, Server } from "../src/serve.ts";
 import { hello, shout } from "../examples/demo.ts";
-
-function findIkigai(): string | null {
-  const home = Deno.env.get("HOME");
-  const candidates = home ? [`${home}/.cargo/bin/ikigai`] : [];
-  for (const dir of (Deno.env.get("PATH") ?? "").split(":")) {
-    if (dir) candidates.push(`${dir}/ikigai`);
-  }
-  for (const candidate of candidates) {
-    try {
-      if (Deno.statSync(candidate).isFile) return candidate;
-    } catch {
-      // keep looking
-    }
-  }
-  return null;
-}
+import { findIkigai, probeWireVersion, spawnServe } from "./rust_host.ts";
 
 const IKIGAI = findIkigai();
+const RUST_WIRE_VERSION = await probeWireVersion(IKIGAI);
 const utf8 = new TextDecoder();
 
-function integration(
-  name: string,
-  fn: () => Promise<void>,
-): void {
+if (IKIGAI !== null) {
+  console.error(
+    `integration: ${IKIGAI} speaks wire v${RUST_WIRE_VERSION}; ` +
+      (RUST_WIRE_VERSION === PROTOCOL_VERSION
+        ? "running the full suite"
+        : "running the version-mismatch suite"),
+  );
+}
+
+/** Full integration: needs a binary speaking OUR wire version. */
+function integration(name: string, fn: () => Promise<void>): void {
   Deno.test({
     name,
-    ignore: IKIGAI === null,
+    ignore: IKIGAI === null || RUST_WIRE_VERSION !== PROTOCOL_VERSION,
     // The Rust CLI child and the in-process server cross test boundaries in
     // ways the strict sanitizers dislike; cleanup is explicit instead.
+    sanitizeResources: false,
+    sanitizeOps: false,
+    fn,
+  });
+}
+
+/** Mismatch integration: needs an OLDER hello-speaking (v6) binary. */
+function mismatchIntegration(name: string, fn: () => Promise<void>): void {
+  Deno.test({
+    name,
+    ignore: IKIGAI === null || RUST_WIRE_VERSION === null ||
+      RUST_WIRE_VERSION === PROTOCOL_VERSION,
     sanitizeResources: false,
     sanitizeOps: false,
     fn,
@@ -62,6 +76,23 @@ async function runRepl(
   assert(out.success, `ikigai ${args.join(" ")} failed:\n${combined}`);
   // Cache annotations and the batch tally go to stderr; return both streams.
   return combined;
+}
+
+/** `runRepl` without the success assertion — for the mismatch suite. */
+async function runReplExpectingTrouble(
+  commands: string[],
+  options: { flag?: "--mount" | "--prefer" | "--override"; target?: string } =
+    {},
+): Promise<string> {
+  const args: string[] = [];
+  if (options.target) args.push(options.flag ?? "--mount", options.target);
+  for (const command of commands) args.push("-c", command);
+  const out = await new Deno.Command(IKIGAI!, {
+    args,
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  return utf8.decode(out.stdout) + utf8.decode(out.stderr);
 }
 
 async function withDenoPeer(
@@ -103,10 +134,10 @@ integration("the Rust host lists Deno endpoints with origin", async () => {
 integration(
   "an --override mount gets verbatim entries from the SAME server",
   async () => {
-    // The v6 money shot: no --verbatim flag, no server-side configuration —
-    // the hello's mode hint makes both mount styles list correctly. (An
-    // --override composes the remote's entries into `list`; --prefer routes
-    // identically but the host does not enumerate its entries there.)
+    // The v6 money shot: no server-side configuration — the hello's mode
+    // hint makes both mount styles list correctly. (An --override composes
+    // the remote's entries into `list`; --prefer routes identically but the
+    // host does not enumerate its entries there.)
     await withDenoPeer(async (path) => {
       const out = await runRepl(["list", "source urn:ts:hello who=Ada"], {
         flag: "--override",
@@ -151,20 +182,16 @@ integration("the Rust host describes a Deno endpoint", async () => {
   });
 });
 
-integration("Deno error text reaches the Rust user", async () => {
+integration("a typed Deno error reaches the Rust user natively", async () => {
+  // v7: MissingArgument crosses TYPED, so the Rust host renders its own
+  // Error::MissingArgument text — not an "endpoint error:" wrapper.
   await withDenoPeer(async (path) => {
-    const out = await new Deno.Command(IKIGAI!, {
-      args: [
-        "--mount",
-        `urn:ts:=${path}`,
-        "-c",
-        "source urn:ts:hello", // missing required `who`
-      ],
-      stdout: "piped",
-      stderr: "piped",
-    }).output();
-    const combined = utf8.decode(out.stdout) + utf8.decode(out.stderr);
-    assert(combined.includes("missing required argument `who`"), combined);
+    const out = await runReplExpectingTrouble(
+      ["source urn:ts:hello"], // missing required `who`
+      { target: `urn:ts:=${path}` },
+    );
+    assert(out.includes("missing required argument `who`"), out);
+    assert(!out.includes("endpoint error"), out);
   });
 });
 
@@ -175,22 +202,8 @@ async function withRustServer(
 ): Promise<void> {
   const dir = Deno.makeTempDirSync({ prefix: "ik-deno-" });
   const path = `${dir}/kernel.sock`;
-  const child = new Deno.Command(IKIGAI!, {
-    args: ["serve", path],
-    stdout: "null",
-    stderr: "null",
-  }).spawn();
+  const child = await spawnServe(IKIGAI!, path);
   try {
-    const deadline = Date.now() + 15_000;
-    while (true) {
-      try {
-        Deno.statSync(path);
-        break;
-      } catch {
-        assert(Date.now() < deadline, "ikigai serve did not come up");
-        await new Promise((r) => setTimeout(r, 100));
-      }
-    }
     await fn(path);
   } finally {
     try {
@@ -206,7 +219,7 @@ async function withRustServer(
 integration("the Deno client drives the Rust kernel", async () => {
   await withRustServer(async (path) => {
     await using k = await connect(path);
-    assertStrictEquals(k.serverVersion, 6);
+    assertStrictEquals(k.serverVersion, 7);
     const rep = await k.source("urn:fn:toUpper", { in: "hi" });
     assertStrictEquals(rep.text, "HI");
     assert(rep.mediaType.startsWith("text/plain"), rep.mediaType);
@@ -243,19 +256,62 @@ integration("the Deno client traces the Rust kernel", async () => {
   });
 });
 
-integration("a Rust error string crosses to Deno", async () => {
+integration("a Rust kernel's typed error crosses to Deno typed", async () => {
+  // v7: an unresolved target arrives as UnresolvedError, taxonomy intact.
   await withRustServer(async (path) => {
     await using k = await connect(path);
-    let message = "";
+    let error: unknown = null;
     try {
       await k.source("urn:fn:nope");
     } catch (e) {
-      assert(e instanceof EndpointError);
-      message = e.message;
+      error = e;
     }
-    assert(message.includes("no endpoint resolved for urn:fn:nope"), message);
+    assert(error instanceof UnresolvedError, String(error));
+    assertStrictEquals(error.iri, "urn:fn:nope");
+    assert(
+      error.message.includes("no endpoint resolved for urn:fn:nope"),
+      error.message,
+    );
   });
 });
+
+// -- the version-mismatch suite (an installed v6 binary) -------------------
+
+mismatchIntegration(
+  "a v6 Rust server is refused cleanly, naming both versions",
+  async () => {
+    await withRustServer(async (path) => {
+      let error: unknown = null;
+      try {
+        await connect(path);
+      } catch (e) {
+        error = e;
+      }
+      assert(error instanceof ProtocolError, String(error));
+      assert(
+        error.message.includes(`v${RUST_WIRE_VERSION}`),
+        error.message,
+      );
+      assert(error.message.includes(`v${PROTOCOL_VERSION}`), error.message);
+    });
+  },
+);
+
+mismatchIntegration(
+  "a v6 Rust host mounting this v7 peer errors naming both versions",
+  async () => {
+    await withDenoPeer(async (path) => {
+      const out = await runReplExpectingTrouble(
+        ["source urn:ts:hello who=Ada"],
+        { target: `urn:ts:=${path}` },
+      );
+      // The v6 client's own rendering of the answered hello mismatch.
+      assert(out.includes(`v${PROTOCOL_VERSION}`), out);
+      assert(out.includes(`v${RUST_WIRE_VERSION}`), out);
+      assert(!out.includes("Hello, Ada!"), out);
+    });
+  },
+);
 
 // A tiny always-on test so this file is never empty on CI.
 Deno.test("integration harness locates the binary or skips", () => {

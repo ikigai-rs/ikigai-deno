@@ -19,8 +19,11 @@ Every app serves the same surface:
 - `GET /reverse?text=…` → resolves `urn:ts:reverse`
 - `GET /catalog` → `kernel.entries()` as JSON (HTML in Fresh) — the app
   _discovers_ what it can reach instead of hard-coding it
-- an `EndpointError` from the wire → **502** carrying the server's message; a
-  `ConnectionLost` → **503** ("is the peer running?")
+- wire errors arrive **typed** (v7) and map to truthful statuses (shared mapping
+  in `http_status.ts`): `DeniedError` → **403**, `NotFoundError` → **404**,
+  `InvalidArgumentError`/`MissingArgumentError` → **400**, transient
+  (timeout/unavailable) → **503**, anything else → **502**; a `ConnectionLost` →
+  **503** ("is the peer running?")
 - the cache verdict is visible: an `X-Ikigai-Cache` response header in Hono and
   Oak, printed in each result fragment in Fresh
 

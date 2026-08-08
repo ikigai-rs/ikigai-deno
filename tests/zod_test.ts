@@ -13,7 +13,7 @@ import {
 } from "@std/assert";
 import { z } from "zod";
 import { connect } from "../src/client.ts";
-import { EndpointError } from "../src/wire.ts";
+import { InvalidArgumentError, MissingArgumentError } from "../src/wire.ts";
 import { type ArgSpec, type EndpointDef, Server } from "../src/serve.ts";
 import { argSpecsFromZod, endpoint } from "../src/zod.ts";
 
@@ -254,50 +254,71 @@ Deno.test("zod: wire text arrives typed in the handler; defaults apply", async (
   });
 });
 
-Deno.test("zod: bad input is a clean endpoint error naming the field, before the handler", async () => {
+Deno.test("zod: bad input crosses as a TYPED InvalidArgument naming the field, before the handler", async () => {
+  // THE wire v7 payoff: the validation failure is no longer a flattened
+  // endpoint string — it arrives as InvalidArgumentError with the field
+  // name structured, so an HTTP face can answer 400 without text sniffing.
   await withZodServer(async (path, invocations) => {
     await using k = await connect(path);
     // A value outside the enum.
     let err = await assertRejects(
       () =>
         k.source("urn:ts:typed", { who: "Ada", ratio: "1", mode: "shouty" }),
-      EndpointError,
+      InvalidArgumentError,
     );
+    assertStrictEquals(err.argument, "mode");
     assert(err.message.includes("invalid argument `mode`"), err.message);
     // Unparseable number: passes through as text, zod names the field.
     err = await assertRejects(
       () => k.source("urn:ts:typed", { who: "Ada", ratio: "fast" }),
-      EndpointError,
+      InvalidArgumentError,
     );
-    assert(err.message.includes("invalid argument `ratio`"), err.message);
+    assertStrictEquals(err.argument, "ratio");
     // A non-integer where .int() is declared.
     err = await assertRejects(
       () => k.source("urn:ts:typed", { who: "Ada", ratio: "1", count: "2.5" }),
-      EndpointError,
+      InvalidArgumentError,
     );
-    assert(err.message.includes("invalid argument `count`"), err.message);
+    assertStrictEquals(err.argument, "count");
     // A boolean that is neither true nor false.
     err = await assertRejects(
       () =>
         k.source("urn:ts:typed", { who: "Ada", ratio: "1", verbose: "yes" }),
-      EndpointError,
+      InvalidArgumentError,
     );
-    assert(err.message.includes("invalid argument `verbose`"), err.message);
+    assertStrictEquals(err.argument, "verbose");
     // None of the rejects reached the handler.
     assertEquals(invocations, []);
   });
 });
 
-Deno.test("zod: a missing required argument keeps the Rust engine's exact text", async () => {
+Deno.test("zod: several bad fields report the first, detail names them all", async () => {
+  await withZodServer(async (path) => {
+    await using k = await connect(path);
+    const err = await assertRejects(
+      () =>
+        k.source("urn:ts:typed", { who: "Ada", ratio: "fast", count: "2.5" }),
+      InvalidArgumentError,
+    );
+    // The error names ONE field (the first issue); the detail lists every
+    // issue, each naming its field.
+    assert(["ratio", "count"].includes(err.argument), err.argument);
+    assert(err.detail.includes("`ratio`"), err.detail);
+    assert(err.detail.includes("`count`"), err.detail);
+  });
+});
+
+Deno.test("zod: a missing required argument is typed, with the Rust engine's exact text", async () => {
   await withZodServer(async (path) => {
     await using k = await connect(path);
     // The ArgSpec gate (shared with explicit-args endpoints) answers first,
     // with the same rendering the Rust kernel uses.
-    await assertRejects(
+    const err = await assertRejects(
       () => k.source("urn:ts:typed", { ratio: "1" }),
-      EndpointError,
+      MissingArgumentError,
       "missing required argument `who`",
     );
+    assertStrictEquals(err.argument, "who");
   });
 });
 
@@ -310,9 +331,9 @@ Deno.test("zod: bytes into a text schema are refused naming the field", async ()
           who: new Uint8Array([0x00, 0xff, 0x01]), // not valid utf-8
           ratio: "1",
         }),
-      EndpointError,
+      InvalidArgumentError,
     );
-    assert(err.message.includes("invalid argument `who`"), err.message);
+    assertStrictEquals(err.argument, "who");
     assert(err.message.includes("not valid UTF-8"), err.message);
   });
 });

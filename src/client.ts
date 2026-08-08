@@ -11,10 +11,12 @@
  * rep.text; // "HI"
  * ```
  *
- * Errors surface as exceptions carrying the server's error string (with the
- * `endpoint error: ` prefix stripped, the way the Rust wire clients do); the
- * wire does not yet carry a structured error taxonomy, so none is fabricated
- * here.
+ * Errors surface as exceptions with their TAXONOMY intact (wire v7): a
+ * remote denial is a `DeniedError`, a remote not-found a `NotFoundError`, a
+ * remote timeout a `TimeoutError` with `transient === true` — the same
+ * variant the server saw, so failover logic and HTTP faces can act on the
+ * kind instead of sniffing message text. All of them subclass
+ * `EndpointError`, so existing `catch (EndpointError)` code keeps working.
  *
  * **Reconnection**: a client made by {@linkcode connect} survives a restarted
  * peer. After a call fails with {@linkcode ConnectionLost}, the next call
@@ -95,6 +97,19 @@ export function buildRequest(verb: Verb, iri: string, args: Args): Request {
   return { verb, target: iri, args: coerced };
 }
 
+/** Throw the failure a reply carries; return when the reply is not one. */
+function throwFailure(reply: Reply): void {
+  if (reply.kind === "errorTyped") {
+    // v7: the taxonomy crosses intact — a remote Denied IS a DeniedError.
+    throw wire.typedError(reply.failure);
+  }
+  if (reply.kind === "error") {
+    // The flat string form is still decodable (discriminants are
+    // append-only) though a v7 server never sends it.
+    throw new EndpointError(wire.decodeErrorMessage(reply.message));
+  }
+}
+
 export interface ConnectOptions {
   /**
    * When set, requests go as `Call::IssueAs` under this capability (which
@@ -130,7 +145,7 @@ export class Client {
   /** Where to redial; `null` disables reconnection (hand-built clients). */
   #path: string | null;
   #mode: HelloMode;
-  #serverVersion: number | null;
+  #serverVersion: number;
   /**
    * When set, requests go as `Call::IssueAs` under this capability (which
    * the server clamps to its authenticated principal).
@@ -143,7 +158,7 @@ export class Client {
     options: {
       capability?: Capability;
       timeoutMs?: number | null;
-      serverVersion?: number | null;
+      serverVersion?: number;
       /** Enables redial-on-loss; {@linkcode connect} always passes it. */
       path?: string;
       /** The hello mode a redial replays. Default verbatim. */
@@ -156,19 +171,18 @@ export class Client {
       ? DEFAULT_TIMEOUT_MS
       : options.timeoutMs;
     this.capability = options.capability ?? null;
-    this.#serverVersion = options.serverVersion === undefined
-      ? wire.PROTOCOL_VERSION
-      : options.serverVersion;
+    this.#serverVersion = options.serverVersion ?? wire.PROTOCOL_VERSION;
     this.#path = options.path ?? null;
     this.#mode = options.mode ?? HelloMode.Verbatim;
   }
 
   /**
-   * The version the server declared in its hello, or `null` for a legacy
-   * (<= v5) server reached through the fallback. Re-read after a redial: a
-   * restarted peer states its version afresh.
+   * The version the server declared in its hello — since v7 that is always
+   * a real number (the hello is required; a server that cannot speak it is
+   * refused at connect). Re-read after a redial: a restarted peer states its
+   * version afresh.
    */
-  get serverVersion(): number | null {
+  get serverVersion(): number {
     return this.#serverVersion;
   }
 
@@ -179,6 +193,7 @@ export class Client {
     const { conn, stream, serverVersion } = await handshake(
       this.#path!,
       this.#mode,
+      this.#timeoutMs,
     );
     try {
       this.#conn.close();
@@ -264,9 +279,7 @@ export class Client {
       reply.representation.cacheStatus = reply.cacheStatus;
       return reply.representation;
     }
-    if (reply.kind === "error") {
-      throw new EndpointError(wire.decodeErrorMessage(reply.message));
-    }
+    throwFailure(reply);
     throw new ProtocolError(`unexpected reply to ${call.kind}: ${reply.kind}`);
   }
 
@@ -346,9 +359,7 @@ export class Client {
     if (reply.kind === "entries") {
       return reply.entries === null ? [] : [...reply.entries];
     }
-    if (reply.kind === "error") {
-      throw new EndpointError(wire.decodeErrorMessage(reply.message));
-    }
+    throwFailure(reply);
     throw new ProtocolError(`unexpected reply to entries: ${reply.kind}`);
   }
 
@@ -384,9 +395,7 @@ export class Client {
       reply.representation.cacheStatus = reply.cacheStatus;
       return [reply.representation, [...reply.events]];
     }
-    if (reply.kind === "error") {
-      throw new EndpointError(wire.decodeErrorMessage(reply.message));
-    }
+    throwFailure(reply);
     throw new ProtocolError(`unexpected reply to issueTraced: ${reply.kind}`);
   }
 
@@ -416,11 +425,12 @@ export class Client {
  * Connect to a kernel server's Unix socket. `path` defaults to the same
  * per-user location the Rust CLI uses.
  *
- * The version hello (wire v6) is the first frame each way. A <= v5 Rust
- * server cannot answer it — it drops the connection silently — so an EOF
- * here means "legacy server": reconnect WITHOUT the hello and warn (the
- * one-version tolerance the design doc removes at v7). A mismatch from a
- * hello-speaking server errors immediately, naming both versions.
+ * The version hello is the first frame each way, and since wire v7 it is
+ * REQUIRED — the v6 legacy-reconnect tolerance is gone. A version mismatch
+ * from any hello-speaking peer errors naming BOTH versions; a peer that
+ * hangs up on the hello predates v6 entirely and is refused with that
+ * diagnosis; a peer that is merely SILENT is reported as hung (bounded by
+ * `timeoutMs`), never misdiagnosed as ancient.
  */
 export async function connect(
   path?: string,
@@ -428,7 +438,14 @@ export async function connect(
 ): Promise<Client> {
   const socketPath = path ?? defaultSocketPath();
   const mode = options.mode ?? HelloMode.Verbatim;
-  const { conn, stream, serverVersion } = await handshake(socketPath, mode);
+  const timeoutMs = options.timeoutMs === undefined
+    ? DEFAULT_TIMEOUT_MS
+    : options.timeoutMs;
+  const { conn, stream, serverVersion } = await handshake(
+    socketPath,
+    mode,
+    timeoutMs,
+  );
   return new Client(conn, stream, {
     capability: options.capability,
     timeoutMs: options.timeoutMs,
@@ -439,21 +456,35 @@ export async function connect(
 }
 
 /**
- * Dial and complete the version hello (with the <= v5 fallback). Shared by
- * {@linkcode connect} and the client's redial, so a reconnection replays
- * exactly the handshake the original connection made.
+ * Dial and complete the version hello. Shared by {@linkcode connect} and the
+ * client's redial, so a reconnection replays exactly the handshake the
+ * original connection made.
  */
 async function handshake(
   socketPath: string,
   mode: HelloMode,
+  timeoutMs: number | null,
 ): Promise<{
   conn: Deno.UnixConn;
   stream: FrameStream;
-  serverVersion: number | null;
+  serverVersion: number;
 }> {
-  let conn = await dial(socketPath);
-  let stream = new FrameStream(conn);
-  let serverVersion: number | null = wire.PROTOCOL_VERSION;
+  const conn = await dial(socketPath);
+  const stream = new FrameStream(conn);
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  if (timeoutMs !== null) {
+    timer = setTimeout(() => {
+      // A Deno read cannot be cancelled directly; closing the connection
+      // rejects it, and `timedOut` names the reason.
+      timedOut = true;
+      try {
+        conn.close();
+      } catch {
+        // already closed
+      }
+    }, timeoutMs);
+  }
   let answer: wire.Hello | null;
   try {
     await stream.writeFrame(
@@ -461,38 +492,43 @@ async function handshake(
     );
     answer = wire.decodeHello(await stream.readFrame());
   } catch (e) {
-    if (e instanceof ProtocolError) {
+    try {
       conn.close();
-      throw e;
+    } catch {
+      // already closed
     }
-    conn.close();
-    console.error(
-      `ikigai: the kernel server at ${socketPath} hung up on the version ` +
-        "hello — it likely predates wire v6; reconnected WITHOUT the hello " +
-        "(tolerated until v7). Update the server.",
+    if (e instanceof ProtocolError) throw e;
+    if (timedOut) {
+      // Silence is a HANG (the server may be overloaded) — do not
+      // misdiagnose it as ancient; a hang-UP is the pre-v6 signature.
+      throw new ConnectionLost(
+        "no answer to the version hello within the deadline (server hung " +
+          "or overloaded)",
+      );
+    }
+    throw new ProtocolError(
+      `the kernel server at ${socketPath} hung up on the version hello — ` +
+        `it predates wire v6 and cannot speak ` +
+        `v${wire.PROTOCOL_VERSION}; update the server`,
     );
-    conn = await dial(socketPath);
-    stream = new FrameStream(conn);
-    serverVersion = null;
-    answer = null;
+  } finally {
+    clearTimeout(timer);
   }
-  if (serverVersion !== null) {
-    if (answer === null) {
-      conn.close();
-      throw new ProtocolError(
-        "the kernel server answered the version hello with something else " +
-          "entirely",
-      );
-    }
-    if (answer.version !== wire.PROTOCOL_VERSION) {
-      conn.close();
-      throw new ProtocolError(
-        `the kernel server speaks wire v${answer.version}, this client ` +
-          `speaks v${wire.PROTOCOL_VERSION} — update the older side`,
-      );
-    }
+  if (answer === null) {
+    conn.close();
+    throw new ProtocolError(
+      "the kernel server answered the version hello with something else " +
+        "entirely",
+    );
   }
-  return { conn, stream, serverVersion };
+  if (answer.version !== wire.PROTOCOL_VERSION) {
+    conn.close();
+    throw new ProtocolError(
+      `the kernel server speaks wire v${answer.version}, this client ` +
+        `speaks v${wire.PROTOCOL_VERSION} — update the older side`,
+    );
+  }
+  return { conn, stream, serverVersion: answer.version };
 }
 
 async function dial(path: string): Promise<Deno.UnixConn> {

@@ -7,7 +7,11 @@
 import { assert, assertStrictEquals } from "@std/assert";
 import { createApp } from "../examples/hono_app.ts";
 import { hello } from "../examples/endpoints.ts";
-import { withApp } from "./examples_util.ts";
+import {
+  invalidInputEndpoints,
+  typedFailureEndpoints,
+  withApp,
+} from "./examples_util.ts";
 
 Deno.test("hono: hello resolves through the wire", async () => {
   await withApp(createApp, async ({ app }) => {
@@ -65,6 +69,33 @@ Deno.test("hono: an endpoint error maps to 502", async () => {
       (await res.text()).includes("no endpoint resolved for urn:ts:upper"),
     );
   }, [hello]);
+});
+
+Deno.test("hono: typed wire errors map to truthful statuses", async () => {
+  // The v7 payoff at the HTTP face: 403/404/503 by TYPE, not 502-for-all.
+  await withApp(createApp, async ({ app }) => {
+    const denied = await app.request("/upper?text=abc");
+    assertStrictEquals(denied.status, 403);
+    assert((await denied.text()).includes("needs urn:cap:upper"));
+    const missing = await app.request("/reverse?text=abc");
+    assertStrictEquals(missing.status, 404);
+    assert((await missing.text()).includes("no such row"));
+    const flaky = await app.request("/hello/Ada");
+    assertStrictEquals(flaky.status, 503); // transient — retrying may work
+    assert((await flaky.text()).includes("upstream down"));
+  }, typedFailureEndpoints());
+});
+
+Deno.test("hono: the ENDPOINT refusing input is a 400, not a 502", async () => {
+  await withApp(createApp, async ({ app }) => {
+    // Framework validation passes (`who` is present); the WIRE refuses it.
+    const invalid = await app.request("/hello/Bob"); // the enum wants Ada
+    assertStrictEquals(invalid.status, 400);
+    assert((await invalid.text()).includes("invalid argument `who`"));
+    const missing = await app.request("/upper?text=abc");
+    assertStrictEquals(missing.status, 400);
+    assert((await missing.text()).includes("missing required argument"));
+  }, invalidInputEndpoints());
 });
 
 Deno.test("hono: a dead peer maps to 503", async () => {

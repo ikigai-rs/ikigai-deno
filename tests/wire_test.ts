@@ -1,14 +1,30 @@
-import { assertEquals, assertStrictEquals, assertThrows } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertInstanceOf,
+  assertStrictEquals,
+  assertThrows,
+} from "@std/assert";
 import * as wire from "../src/wire.ts";
 import {
   CacheStatus,
   Capability,
   content,
+  DeniedError,
+  EndpointError,
   Expiry,
   inline,
+  InvalidArgumentError,
+  MissingArgumentError,
+  NotFoundError,
   ProtocolError,
   reference,
   Representation,
+  TimeoutError,
+  toWireFailure,
+  typedError,
+  UnavailableError,
+  UnresolvedError,
   Verb,
 } from "../src/wire.ts";
 
@@ -151,6 +167,26 @@ const REPLIES: wire.Reply[] = [
     ],
   },
   { kind: "error", message: "endpoint error: boom" },
+  { kind: "errorTyped", failure: { kind: "unresolved", iri: "urn:x:y" } },
+  { kind: "errorTyped", failure: { kind: "missingArgument", name: "in" } },
+  {
+    kind: "errorTyped",
+    failure: { kind: "invalidArgument", name: "n", detail: "not a number" },
+  },
+  { kind: "errorTyped", failure: { kind: "endpoint", message: "boom" } },
+  {
+    kind: "errorTyped",
+    failure: { kind: "denied", message: "needs urn:cap:x" },
+  },
+  {
+    kind: "errorTyped",
+    failure: { kind: "notFound", message: "no such row" },
+  },
+  { kind: "errorTyped", failure: { kind: "timeout", message: "5s elapsed" } },
+  {
+    kind: "errorTyped",
+    failure: { kind: "unavailable", message: "connection refused" },
+  },
   {
     kind: "resolvedTraced",
     representation: new Representation("HI", "text/plain"),
@@ -220,14 +256,138 @@ Deno.test("BTreeMap order is UTF-8 byte order, not UTF-16 code units", () => {
   ]);
 });
 
+// --- the typed error taxonomy (wire v7) ---
+
+Deno.test("ErrorTyped wire discriminant is five (the Rust-locked vector)", () => {
+  // Mirrors ikigai-wire's `error_typed_wire_discriminant_is_five`: the
+  // discriminants are the public ABI.
+  const endpoint = wire.encodeReply({
+    kind: "errorTyped",
+    failure: { kind: "endpoint", message: "x" },
+  });
+  assertStrictEquals(endpoint[0], 5, "Reply::ErrorTyped is variant 5");
+  const denied = wire.encodeReply({
+    kind: "errorTyped",
+    failure: { kind: "denied", message: "x" },
+  });
+  assertStrictEquals(denied[1], 4, "WireError::Denied is variant 4");
+});
+
+Deno.test("ErrorTyped(InvalidArgument) golden bytes", () => {
+  // The one struct-shaped variant: name then detail, declaration order.
+  const expected = b(
+    [0x05], // Reply::ErrorTyped
+    [0x02], // WireError::InvalidArgument
+    [0x01],
+    "n", // name
+    [0x0c],
+    "not a number", // detail
+  );
+  assertEquals(
+    wire.encodeReply({
+      kind: "errorTyped",
+      failure: { kind: "invalidArgument", name: "n", detail: "not a number" },
+    }),
+    expected,
+  );
+});
+
+Deno.test("every taxonomy variant crosses with kind and transience intact", () => {
+  // The property the reliability overlays and the HTTP faces depend on:
+  // the same variant comes back, and transient survives the wire.
+  const cases: [wire.WireFailure, unknown, boolean][] = [
+    [{ kind: "unresolved", iri: "urn:x:y" }, UnresolvedError, false],
+    [{ kind: "missingArgument", name: "in" }, MissingArgumentError, false],
+    [
+      { kind: "invalidArgument", name: "n", detail: "not a number" },
+      InvalidArgumentError,
+      false,
+    ],
+    [{ kind: "endpoint", message: "boom" }, EndpointError, false],
+    [{ kind: "denied", message: "needs urn:cap:x" }, DeniedError, false],
+    [{ kind: "notFound", message: "no such row" }, NotFoundError, false],
+    [{ kind: "timeout", message: "5s elapsed" }, TimeoutError, true],
+    [
+      { kind: "unavailable", message: "connection refused" },
+      UnavailableError,
+      true,
+    ],
+  ];
+  for (const [failure, cls, transient] of cases) {
+    const decoded = wire.decodeReply(
+      wire.encodeReply({ kind: "errorTyped", failure }),
+    );
+    assert(decoded.kind === "errorTyped");
+    assertEquals(decoded.failure, failure);
+    const error = typedError(decoded.failure);
+    // deno-lint-ignore no-explicit-any
+    assertInstanceOf(error, cls as any);
+    assertStrictEquals(
+      error.transient,
+      transient,
+      `transience must survive the wire: ${failure.kind}`,
+    );
+    // And the round trip back: a thrown typed error re-crosses as itself.
+    assertEquals(toWireFailure(error), failure);
+  }
+});
+
+Deno.test("typed errors render the Rust kernel's message texts", () => {
+  assertStrictEquals(
+    typedError({ kind: "unresolved", iri: "urn:x:y" }).message,
+    "no endpoint resolved for urn:x:y",
+  );
+  assertStrictEquals(
+    typedError({ kind: "missingArgument", name: "in" }).message,
+    "missing required argument `in`",
+  );
+  assertStrictEquals(
+    typedError({ kind: "invalidArgument", name: "n", detail: "not a number" })
+      .message,
+    "invalid argument `n`: not a number",
+  );
+  // The message-bearing variants carry the message verbatim; the CLASS is
+  // the taxonomy (no "denied: " prefix baked into the text).
+  assertStrictEquals(
+    typedError({ kind: "denied", message: "needs urn:cap:x" }).message,
+    "needs urn:cap:x",
+  );
+});
+
+Deno.test("a plain thrown error degrades to the endpoint variant", () => {
+  // The server-side fallback mirrors Rust's unknown-variant degrade:
+  // message preserved, taxonomy honest (it IS an endpoint failure).
+  assertEquals(toWireFailure(new Error("boom")), {
+    kind: "endpoint",
+    message: "boom",
+  });
+  assertEquals(toWireFailure("stringly"), {
+    kind: "endpoint",
+    message: "stringly",
+  });
+});
+
+Deno.test("an unknown FUTURE taxonomy variant degrades to a named base error", () => {
+  // Append-only means variant 8+ belongs to a newer wire revision. Every
+  // existing variant leads with its message string, so a same-shaped future
+  // variant decodes to a base EndpointError that NAMES the unknown variant.
+  const payload = b([0x05], [0x08], [0x04], "next");
+  const decoded = wire.decodeReply(payload);
+  assert(decoded.kind === "errorTyped");
+  const error = typedError(decoded.failure);
+  assertStrictEquals(error.constructor, EndpointError);
+  assert(error.message.includes("variant 8"), error.message);
+  assert(error.message.includes("next"), error.message);
+});
+
 // --- failure modes ---
 
 Deno.test("an unknown Call variant names the protocol version", () => {
-  assertThrows(() => wire.decodeCall(b([0x09])), ProtocolError, "v6");
+  assertThrows(() => wire.decodeCall(b([0x09])), ProtocolError, "v7");
 });
 
 Deno.test("an unknown Reply variant names the protocol version", () => {
-  assertThrows(() => wire.decodeReply(b([0x2a])), ProtocolError, "protocol v6");
+  assertThrows(() => wire.decodeReply(b([0x2a])), ProtocolError, "protocol v7");
 });
 
 Deno.test("a truncated payload is a protocol error", () => {

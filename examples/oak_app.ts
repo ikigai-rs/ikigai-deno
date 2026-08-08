@@ -33,6 +33,7 @@ import {
   EndpointError,
   type Representation,
 } from "../src/mod.ts";
+import { httpStatus } from "./http_status.ts";
 
 export function socketPath(): string {
   return Deno.env.get("IKIGAI_SOCKET") ?? defaultSocketPath();
@@ -91,15 +92,17 @@ export async function createApp(
   });
 
   const app = new Application();
-  // Wire errors become gateway answers; an `HttpError` from `ctx.throw`
-  // keeps its own status (handling it here keeps Oak's default logger
-  // quiet); anything else stays Oak's problem.
+  // Wire errors arrive TYPED (v7) and become truthful statuses — a remote
+  // denial 403, a not-found 404, bad input 400, transient 503, the rest
+  // 502; an `HttpError` from `ctx.throw` keeps its own status (handling it
+  // here keeps Oak's default logger quiet); anything else stays Oak's
+  // problem.
   app.use(async (ctx, next) => {
     try {
       await next();
     } catch (e) {
       if (e instanceof EndpointError) {
-        ctx.response.status = 502;
+        ctx.response.status = httpStatus(e);
         ctx.response.body = e.message;
       } else if (e instanceof ConnectionLost) {
         ctx.response.status = 503;

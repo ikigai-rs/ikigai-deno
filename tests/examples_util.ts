@@ -4,8 +4,11 @@
  * is pure Deno, so these run on CI with no Rust binary.
  */
 
+import { z } from "zod";
 import type { Client } from "../src/client.ts";
-import { type EndpointDef, Server } from "../src/serve.ts";
+import { endpoint, type EndpointDef, Server } from "../src/serve.ts";
+import { endpoint as zodEndpoint } from "../src/zod.ts";
+import { DeniedError, NotFoundError, UnavailableError } from "../src/mod.ts";
 import { ENDPOINTS } from "../examples/endpoints.ts";
 
 /** An example app under test: whatever `createApp` returned. */
@@ -39,6 +42,44 @@ export async function withPeer(
     await serving;
     Deno.removeSync(dir, { recursive: true });
   }
+}
+
+/**
+ * A space whose endpoints fail TYPED (wire v7) — the fixtures for the
+ * status-mapping smoke tests: `/upper` meets a denial (403), `/reverse` a
+ * not-found (404), `/hello` a transient unavailability (503).
+ */
+export function typedFailureEndpoints(): EndpointDef[] {
+  return [
+    endpoint("urn:ts:upper", { summary: "gated" }, () => {
+      throw new DeniedError("needs urn:cap:upper");
+    }),
+    endpoint("urn:ts:reverse", { summary: "absent" }, () => {
+      throw new NotFoundError("no such row");
+    }),
+    endpoint("urn:ts:hello", { summary: "flaky" }, () => {
+      throw new UnavailableError("upstream down");
+    }),
+  ];
+}
+
+/**
+ * A space whose endpoints refuse the APP's (framework-valid) input at the
+ * wire: `/hello/:who` fails zod validation (InvalidArgument), `/upper`
+ * lacks an argument the endpoint requires (MissingArgument) — both must
+ * surface as 400, not a blanket 502.
+ */
+export function invalidInputEndpoints(): EndpointDef[] {
+  return [
+    zodEndpoint("urn:ts:hello", {
+      summary: "only greets Ada",
+      input: z.object({ who: z.enum(["Ada"]) }),
+    }, ({ who }) => `Hello, ${who}!`),
+    endpoint("urn:ts:upper", {
+      summary: "wants an argument the app does not send",
+      args: [{ name: "extra", required: true }, { name: "text" }],
+    }, ({ text }) => String(text).toUpperCase()),
+  ];
 }
 
 /** `withPeer`, plus app construction and kernel-client cleanup. */
