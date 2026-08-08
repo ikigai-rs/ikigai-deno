@@ -18,7 +18,7 @@ jobs:
       - name: Lint
         run: deno lint
       - name: Type-check
-        run: deno check src/mod.ts examples/demo.ts
+        run: deno check src/mod.ts examples/demo.ts examples/endpoints.ts examples/hono_app.ts examples/oak_app.ts examples/fresh_app.ts
       - name: Test
         # Integration tests that need the `ikigai` binary skip themselves
         # when it is absent (CI has no Rust host; they run locally).

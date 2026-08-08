@@ -9,10 +9,15 @@
     "./serve": "./src/serve.ts"
   },
   "imports": {
-    "@std/assert": "jsr:@std/assert@^1"
+    "@std/assert": "jsr:@std/assert@^1",
+    "@fresh/core": "jsr:@fresh/core@^2.3",
+    "@hono/hono": "jsr:@hono/hono@^4.13",
+    "@oak/oak": "jsr:@oak/oak@^17.2",
+    "preact": "npm:preact@^10.27",
+    "preact-render-to-string": "npm:preact-render-to-string@^6.6"
   },
   "tasks": {
-    "check": "deno fmt --check && deno lint && deno check src/mod.ts examples/demo.ts && deno test -A",
+    "check": "deno fmt --check && deno lint && deno check src/mod.ts examples/demo.ts examples/endpoints.ts examples/hono_app.ts examples/oak_app.ts examples/fresh_app.ts && deno test -A",
     "test": "deno test -A"
   }
 }

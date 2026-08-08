@@ -19,8 +19,9 @@ its mounter wants.
 ## Install
 
 Nothing to install: Deno imports by specifier, and this package has zero runtime
-dependencies (`@std/assert` is test-only). Until it is published to JSR, import
-by path or URL:
+dependencies (`@std/assert` is test-only; the web frameworks in the import map
+are used only by `examples/` — `src/` imports nothing). Until it is published to
+JSR, import by path or URL:
 
 ```ts
 import { connect, endpoint, serve } from "./src/mod.ts";
@@ -96,6 +97,10 @@ ikigai --mount urn:ts:=/tmp/ts.sock -c list
 
 Or run the packaged demo: `deno run -A examples/demo.ts [socket-path]` — serves
 `urn:ts:hello` + `urn:ts:shout` and prints the try-me mount line.
+
+For the client side in an application shape, `examples/` also carries three
+small web apps (Hono, Oak, Fresh) whose route handlers are thin faces over
+`kernel.source(...)` — see [examples/README.md](examples/README.md).
 
 What a served endpoint gets for free, because its describe face is real:
 
