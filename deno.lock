@@ -43,7 +43,8 @@
     "npm:preact-render-to-string@^6.6.3": "6.7.0_preact@10.29.8",
     "npm:preact@^10.27.0": "10.29.8_preact-render-to-string@6.7.0",
     "npm:preact@^10.28.2": "10.29.8_preact-render-to-string@6.7.0",
-    "npm:preact@^10.29.1": "10.29.8_preact-render-to-string@6.7.0"
+    "npm:preact@^10.29.1": "10.29.8_preact-render-to-string@6.7.0",
+    "npm:zod@4": "4.4.3"
   },
   "jsr": {
     "@deno/esbuild-plugin@1.2.1": {
@@ -379,6 +380,9 @@
       "optionalPeers": [
         "preact-render-to-string"
       ]
+    },
+    "zod@4.4.3": {
+      "integrity": "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="
     }
   },
   "workspace": {
@@ -388,7 +392,8 @@
       "jsr:@oak/oak@^17.2.0",
       "jsr:@std/assert@1",
       "npm:preact-render-to-string@^6.6.0",
-      "npm:preact@^10.27.0"
+      "npm:preact@^10.27.0",
+      "npm:zod@4"
     ]
   }
 }

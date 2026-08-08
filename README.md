@@ -18,10 +18,12 @@ its mounter wants.
 
 ## Install
 
-Nothing to install: Deno imports by specifier, and this package has zero runtime
-dependencies (`@std/assert` is test-only; the web frameworks in the import map
-are used only by `examples/` — `src/` imports nothing). Until it is published to
-JSR, import by path or URL:
+Nothing to install: Deno imports by specifier, and the core of this package has
+zero runtime dependencies (`@std/assert` is test-only; the web frameworks in the
+import map are used only by `examples/`; **zod** is a peer dependency of the
+`./zod` entry point alone — nothing else imports it, so consumers who declare
+`args:` explicitly never resolve it). Until it is published to JSR, import by
+path or URL:
 
 ```ts
 import { connect, endpoint, serve } from "./src/mod.ts";
@@ -134,12 +136,47 @@ form that mounter wants — both mount styles list correctly against the same
 server, no flags. `stripAlias` (and the demo's `--verbatim`) only set the
 default for legacy (<= v5) clients that cannot say.
 
+### zod → ArgSpec (declare the contract once)
+
+TS types are erased at runtime, so L0 ArgSpecs are explicit spec data. The
+`./zod` entry point is the schema-derived rung: a `z.object(...)` is the ONE
+statement of the input contract — the ArgSpecs derive from it, the same schema
+validates every dispatch (before the handler), and the handler receives the
+parsed, typed output:
+
+```ts
+import { z } from "zod";
+import { endpoint } from "@ikigai/wire/zod";
+
+const hello = endpoint("urn:ts:hello", {
+  summary: "Greet someone",
+  input: z.object({
+    who: z.string().describe("the name to greet"),
+    greeting: z.string().default("Hello"),
+    mode: z.enum(["loud", "soft"]).optional(),
+  }),
+}, ({ who, greeting, mode }) => `${greeting}, ${who}!`); // typed, defaulted
+```
+
+The derivation: `z.string()` → xsd:string, `z.number()` → xsd:double (`.int()` →
+xsd:integer), `z.boolean()` → xsd:boolean, `z.enum` → `one_of`, `.default(v)` →
+optional + `default`, `.optional()` → optional, `.describe()` → the per-arg
+summary. Anything else (arrays, nested objects, unions) throws at declaration
+time — wire arguments are named text values, and a face that cannot say what it
+takes would make the manifold lie. Bad input at dispatch is a clean endpoint
+error naming the field; wire text is coerced by the declared type first (`"3.5"`
+→ `3.5`, `"true"` → `true`), so handlers never `String(x)` anything. Explicit
+`args:` still work everywhere (the core stays zero-dep); given BOTH, the
+explicit specs win the describe face but are checked against the schema, loudly,
+on any contradiction.
+
 ### Handlers
 
 - Receive their declared args as an object (utf-8 strings; raw `Uint8Array` when
   not valid utf-8). By-reference arguments (`ArgRef::Reference` / `Content`) are
   refused loudly: an L0 peer has no back-channel to the host to dereference
-  them.
+  them. Handlers from the `./zod` rung instead receive the schema's parsed,
+  typed output.
 - Return `string` or `Uint8Array` (typed by the endpoint's declared `output`), a
   `[value, mediaType]` tuple, or a full `Representation`. Async handlers are
   fine.

@@ -1,6 +1,13 @@
 /**
  * The endpoint set the example apps resolve: hello / upper / reverse.
  *
+ * Declared in the zod style: the schema is the ONE statement of the input
+ * contract — the ArgSpecs the host engine routes named arguments by derive
+ * from it, the same schema validates every dispatch, and the handlers
+ * receive TYPED strings (no `String(text)` coercion). Compare
+ * `examples/demo.ts`, which declares explicit `args:` and stays
+ * zero-dependency.
+ *
  * All three are pure functions of their inputs, so they declare
  * `cacheable: true` — served directly that only marks the representation
  * (`Expiry::Never`); served through a Rust kernel mount the kernel actually
@@ -15,44 +22,29 @@
  * Then point any example app at that socket via `IKIGAI_SOCKET`.
  */
 
+import { z } from "zod";
 import { defaultSocketPath } from "../src/client.ts";
-import { endpoint, Server } from "../src/serve.ts";
-
-const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
+import { Server } from "../src/serve.ts";
+import { endpoint } from "../src/zod.ts";
 
 export const hello = endpoint("urn:ts:hello", {
   summary: "Greet someone",
-  args: [{
-    name: "who",
-    required: true,
-    summary: "the name to greet",
-    class: XSD_STRING,
-  }],
+  input: z.object({ who: z.string().describe("the name to greet") }),
   cacheable: true,
 }, ({ who }) => `Hello, ${who}!`);
 
 export const upper = endpoint("urn:ts:upper", {
   summary: "Uppercase a string",
-  args: [{
-    name: "text",
-    required: true,
-    summary: "the text to uppercase",
-    class: XSD_STRING,
-  }],
+  input: z.object({ text: z.string().describe("the text to uppercase") }),
   cacheable: true,
-}, ({ text }) => String(text).toUpperCase());
+}, ({ text }) => text.toUpperCase());
 
 export const reverse = endpoint("urn:ts:reverse", {
   summary: "Reverse a string",
-  args: [{
-    name: "text",
-    required: true,
-    summary: "the text to reverse",
-    class: XSD_STRING,
-  }],
+  input: z.object({ text: z.string().describe("the text to reverse") }),
   // Reverse by code point, not UTF-16 unit — "ma\u{1F5A4}" survives the trip.
   cacheable: true,
-}, ({ text }) => [...String(text)].reverse().join(""));
+}, ({ text }) => [...text].reverse().join(""));
 
 export const ENDPOINTS = [hello, upper, reverse];
 
