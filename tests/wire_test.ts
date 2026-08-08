@@ -266,3 +266,22 @@ Deno.test("a representation's media type is canonical", () => {
   });
   assertStrictEquals(both.mediaType, "text/plain;boundary=x;charset=utf-8");
 });
+
+Deno.test("cacheStatusName renders the header/page token", () => {
+  const rep = new Representation("x");
+  assertStrictEquals(rep.cacheStatusName, "NONE"); // no server stamped one
+  rep.cacheStatus = CacheStatus.Hit;
+  assertStrictEquals(rep.cacheStatusName, "HIT");
+  rep.cacheStatus = CacheStatus.Miss;
+  assertStrictEquals(rep.cacheStatusName, "MISS");
+  rep.cacheStatus = CacheStatus.Uncacheable;
+  assertStrictEquals(rep.cacheStatusName, "UNCACHEABLE");
+});
+
+Deno.test("a representation's data feeds BodyInit directly", () => {
+  // The load-bearing TYPE-level assertion: `Representation.data` is
+  // `Uint8Array<ArrayBuffer>`, so `deno check` accepts it as a Response
+  // body with no copy and no cast (the TS 6 BodyInit tightening).
+  const body: BodyInit = new Representation("payload").data;
+  assertStrictEquals(new TextDecoder().decode(body as Uint8Array), "payload");
+});

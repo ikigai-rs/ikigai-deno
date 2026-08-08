@@ -93,14 +93,12 @@ Deno.test("the hello mode picks the entries form per connection", async () => {
     // A verbatim client (plain --connect / --prefer) sees declared IRIs…
     await using verbatim = await connect(path);
     const verbatimEntries = await verbatim.entries();
-    assert(verbatimEntries !== null);
     assert(verbatimEntries.some((e) => e.pattern === "urn:ts:hello"));
     // …while an alias-mode client (an alias --mount) sees stripped ones,
     // on the SAME server, with no server-side configuration. This is what
     // the v6 mode hint retires the guessing for.
     await using alias = await connect(path, { mode: HelloMode.Alias });
     const aliasEntries = await alias.entries();
-    assert(aliasEntries !== null);
     assert(aliasEntries.some((e) => e.pattern === "urn:hello"));
     assert(!aliasEntries.some((e) => e.pattern === "urn:ts:hello"));
   });

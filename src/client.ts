@@ -15,6 +15,16 @@
  * `endpoint error: ` prefix stripped, the way the Rust wire clients do); the
  * wire does not yet carry a structured error taxonomy, so none is fabricated
  * here.
+ *
+ * **Reconnection**: a client made by {@linkcode connect} survives a restarted
+ * peer. After a call fails with {@linkcode ConnectionLost}, the next call
+ * redials once (a fresh dial and hello, same path and mode) before failing.
+ * Within a single call, only a failure to SEND — the dial or the write of the
+ * request frame — is retried (once, on a fresh connection): a frame that
+ * never left cannot have executed. A call that WAS sent and then lost its
+ * reply (EOF mid-reply, read timeout) always fails without replay — the
+ * server may have executed it, and replaying a Sink is not this layer's
+ * decision to make (the same idempotency caution the Rust transports state).
  */
 
 import * as wire from "./wire.ts";
@@ -114,17 +124,18 @@ export class Client {
   #timeoutMs: number | null;
   #timedOut = false;
   #closed = false;
+  /** The connection is known-lost; the next call redials before sending. */
+  #dead = false;
   #chain: Promise<unknown> = Promise.resolve();
+  /** Where to redial; `null` disables reconnection (hand-built clients). */
+  #path: string | null;
+  #mode: HelloMode;
+  #serverVersion: number | null;
   /**
    * When set, requests go as `Call::IssueAs` under this capability (which
    * the server clamps to its authenticated principal).
    */
   capability: Capability | null;
-  /**
-   * The version the server declared in its hello, or `null` for a legacy
-   * (<= v5) server reached through the fallback.
-   */
-  readonly serverVersion: number | null;
 
   constructor(
     conn: Deno.UnixConn,
@@ -133,6 +144,10 @@ export class Client {
       capability?: Capability;
       timeoutMs?: number | null;
       serverVersion?: number | null;
+      /** Enables redial-on-loss; {@linkcode connect} always passes it. */
+      path?: string;
+      /** The hello mode a redial replays. Default verbatim. */
+      mode?: HelloMode;
     } = {},
   ) {
     this.#conn = conn;
@@ -141,40 +156,92 @@ export class Client {
       ? DEFAULT_TIMEOUT_MS
       : options.timeoutMs;
     this.capability = options.capability ?? null;
-    this.serverVersion = options.serverVersion === undefined
+    this.#serverVersion = options.serverVersion === undefined
       ? wire.PROTOCOL_VERSION
       : options.serverVersion;
+    this.#path = options.path ?? null;
+    this.#mode = options.mode ?? HelloMode.Verbatim;
+  }
+
+  /**
+   * The version the server declared in its hello, or `null` for a legacy
+   * (<= v5) server reached through the fallback. Re-read after a redial: a
+   * restarted peer states its version afresh.
+   */
+  get serverVersion(): number | null {
+    return this.#serverVersion;
   }
 
   // -- transport ---------------------------------------------------------
 
-  async #roundTripNow(call: Call): Promise<Reply> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    if (this.#timeoutMs !== null) {
-      timer = setTimeout(() => {
-        // A Deno read cannot be cancelled directly; closing the connection
-        // rejects it, and #timedOut names the reason.
-        this.#timedOut = true;
-        try {
-          this.#conn.close();
-        } catch {
-          // already closed
-        }
-      }, this.#timeoutMs);
-    }
+  /** Dial + hello afresh (same path, same mode) and adopt the connection. */
+  async #redial(): Promise<void> {
+    const { conn, stream, serverVersion } = await handshake(
+      this.#path!,
+      this.#mode,
+    );
     try {
-      await this.#stream.writeFrame(wire.encodeCall(call));
-      return wire.decodeReply(await this.#stream.readFrame());
-    } catch (e) {
-      if (e instanceof ProtocolError) throw e;
-      if (this.#timedOut) {
-        throw new ConnectionLost(
-          "no response from the kernel server (it may be hung or gone)",
-        );
+      this.#conn.close();
+    } catch {
+      // already closed
+    }
+    this.#conn = conn;
+    this.#stream = stream;
+    this.#serverVersion = serverVersion;
+    this.#dead = false;
+  }
+
+  async #roundTripNow(call: Call): Promise<Reply> {
+    if (this.#closed) {
+      throw new ConnectionLost("this client has been closed");
+    }
+    // The one-redial-per-call budget: spent up front when the previous call
+    // marked the connection lost, or mid-call when the SEND itself fails.
+    let redialed = false;
+    if (this.#dead && this.#path !== null) {
+      await this.#redial();
+      redialed = true;
+    }
+    while (true) {
+      this.#timedOut = false;
+      const conn = this.#conn;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      if (this.#timeoutMs !== null) {
+        timer = setTimeout(() => {
+          // A Deno read cannot be cancelled directly; closing the connection
+          // rejects it, and #timedOut names the reason.
+          this.#timedOut = true;
+          try {
+            conn.close();
+          } catch {
+            // already closed
+          }
+        }, this.#timeoutMs);
       }
-      throw new ConnectionLost(`the kernel server is unreachable: ${e}`);
-    } finally {
-      clearTimeout(timer);
+      let sent = false;
+      try {
+        await this.#stream.writeFrame(wire.encodeCall(call));
+        sent = true;
+        return wire.decodeReply(await this.#stream.readFrame());
+      } catch (e) {
+        if (e instanceof ProtocolError) throw e;
+        this.#dead = true;
+        if (this.#timedOut) {
+          throw new ConnectionLost(
+            "no response from the kernel server (it may be hung or gone)",
+          );
+        }
+        // A call that was SENT may have executed server-side — never replay
+        // it; the redial happens on the NEXT call. Only a failure to send
+        // (the frame never left) is retried, once, on a fresh connection.
+        if (sent || redialed || this.#path === null) {
+          throw new ConnectionLost(`the kernel server is unreachable: ${e}`);
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+      await this.#redial();
+      redialed = true;
     }
   }
 
@@ -270,13 +337,14 @@ export class Client {
 
   /**
    * The catalog: every binding the server's space enumerates (already
-   * capability-scoped by the server). `null` if the space does not support
-   * enumeration.
+   * capability-scoped by the server). Always an array — a space that does
+   * not support enumeration lists as empty, the same answer a caller can
+   * iterate either way.
    */
-  async entries(): Promise<SpaceEntry[] | null> {
+  async entries(): Promise<SpaceEntry[]> {
     const reply = await this.#roundTrip({ kind: "entries" });
     if (reply.kind === "entries") {
-      return reply.entries === null ? null : [...reply.entries];
+      return reply.entries === null ? [] : [...reply.entries];
     }
     if (reply.kind === "error") {
       throw new EndpointError(wire.decodeErrorMessage(reply.message));
@@ -360,6 +428,29 @@ export async function connect(
 ): Promise<Client> {
   const socketPath = path ?? defaultSocketPath();
   const mode = options.mode ?? HelloMode.Verbatim;
+  const { conn, stream, serverVersion } = await handshake(socketPath, mode);
+  return new Client(conn, stream, {
+    capability: options.capability,
+    timeoutMs: options.timeoutMs,
+    serverVersion,
+    path: socketPath,
+    mode,
+  });
+}
+
+/**
+ * Dial and complete the version hello (with the <= v5 fallback). Shared by
+ * {@linkcode connect} and the client's redial, so a reconnection replays
+ * exactly the handshake the original connection made.
+ */
+async function handshake(
+  socketPath: string,
+  mode: HelloMode,
+): Promise<{
+  conn: Deno.UnixConn;
+  stream: FrameStream;
+  serverVersion: number | null;
+}> {
   let conn = await dial(socketPath);
   let stream = new FrameStream(conn);
   let serverVersion: number | null = wire.PROTOCOL_VERSION;
@@ -401,11 +492,7 @@ export async function connect(
       );
     }
   }
-  return new Client(conn, stream, {
-    capability: options.capability,
-    timeoutMs: options.timeoutMs,
-    serverVersion,
-  });
+  return { conn, stream, serverVersion };
 }
 
 async function dial(path: string): Promise<Deno.UnixConn> {

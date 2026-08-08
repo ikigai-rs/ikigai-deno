@@ -65,6 +65,12 @@ Notes:
   socket raises `ConnectionLost`; a hung server trips the read deadline (default
   300 s — long resolutions are silent, so silence is not proof of death; same
   rationale as the Rust client).
+- The client **reconnects**: after a `ConnectionLost`, the next call redials
+  once (fresh hello, same mode) before failing — a restarted peer stops meaning
+  failure-forever. A call is only ever retried when its SEND failed (the frame
+  never left, so it cannot have executed); a call that was sent and lost its
+  reply always fails without replay — the server may have executed it (the Rust
+  transports' idempotency caution).
 - The wire is strictly call/reply per connection, so concurrent calls on one
   client serialize internally — `Promise.all` of several sources is safe, just
   sequential.

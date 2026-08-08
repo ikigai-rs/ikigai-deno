@@ -208,7 +208,12 @@ export enum CacheStatus {
  * golden threads are kernel-local and never cross the wire.
  */
 export class Representation {
-  readonly data: Uint8Array;
+  /**
+   * Backed by a plain `ArrayBuffer` (a `SharedArrayBuffer`-backed input is
+   * copied at construction), so it feeds `BodyInit` consumers directly:
+   * `new Response(rep.data)` type-checks under TS 6.
+   */
+  readonly data: Uint8Array<ArrayBuffer>;
   readonly baseMediaType: string;
   readonly params: Record<string, string>;
   readonly expiry: Expiry;
@@ -234,7 +239,11 @@ export class Representation {
       }
     }
     Object.assign(parsed, options.params ?? {});
-    this.data = typeof data === "string" ? utf8Encoder.encode(data) : data;
+    this.data = typeof data === "string"
+      ? utf8Encoder.encode(data)
+      : data.buffer instanceof ArrayBuffer
+      ? (data as Uint8Array<ArrayBuffer>)
+      : new Uint8Array(data); // copy off a SharedArrayBuffer
     this.baseMediaType = base.trim();
     this.params = parsed;
     this.expiry = options.expiry ?? Expiry.always();
@@ -251,6 +260,19 @@ export class Representation {
 
   get text(): string {
     return utf8Decoder.decode(this.data);
+  }
+
+  /**
+   * The cache verdict as the conventional header/page token: `HIT` / `MISS` /
+   * `UNCACHEABLE`, or `NONE` before any server stamped one.
+   */
+  get cacheStatusName(): "HIT" | "MISS" | "UNCACHEABLE" | "NONE" {
+    return this.cacheStatus === null
+      ? "NONE"
+      : CacheStatus[this.cacheStatus].toUpperCase() as
+        | "HIT"
+        | "MISS"
+        | "UNCACHEABLE";
   }
 }
 

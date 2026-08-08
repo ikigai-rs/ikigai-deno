@@ -211,7 +211,6 @@ integration("the Deno client drives the Rust kernel", async () => {
     assertStrictEquals(rep.text, "HI");
     assert(rep.mediaType.startsWith("text/plain"), rep.mediaType);
     const entries = await k.entries();
-    assert(entries !== null);
     assert(entries.some((e) => e.endpoint === "toUpper"));
     const description = await k.describe("urn:fn:toUpper");
     assert(description !== null);
