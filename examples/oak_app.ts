@@ -33,7 +33,6 @@ import {
   EndpointError,
   type Representation,
 } from "../src/mod.ts";
-import { cacheStatusName } from "./support.ts";
 
 export function socketPath(): string {
   return Deno.env.get("IKIGAI_SOCKET") ?? defaultSocketPath();
@@ -42,7 +41,7 @@ export function socketPath(): string {
 /** A representation IS a response: bytes + media type + cache verdict. */
 function send(ctx: Context, rep: Representation): void {
   ctx.response.headers.set("Content-Type", rep.mediaType);
-  ctx.response.headers.set("X-Ikigai-Cache", cacheStatusName(rep));
+  ctx.response.headers.set("X-Ikigai-Cache", rep.cacheStatusName);
   ctx.response.body = rep.data;
 }
 
@@ -83,7 +82,7 @@ export async function createApp(
   // The kernel's catalog, as JSON: what this app could reach, discovered
   // from the running space rather than hard-coded.
   router.get("/catalog", async (ctx) => {
-    const entries = await kernel.entries() ?? [];
+    const entries = await kernel.entries();
     ctx.response.body = entries.map((e) => ({
       pattern: e.pattern,
       endpoint: e.endpoint,

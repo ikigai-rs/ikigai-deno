@@ -28,7 +28,6 @@ import {
   EndpointError,
   type Representation,
 } from "../src/mod.ts";
-import { cacheStatusName } from "./support.ts";
 
 export function socketPath(): string {
   return Deno.env.get("IKIGAI_SOCKET") ?? defaultSocketPath();
@@ -36,12 +35,10 @@ export function socketPath(): string {
 
 /** A representation IS a response: bytes + media type + cache verdict. */
 function reply(rep: Representation): Response {
-  // The copy is a type workaround: `Representation.data` is typed
-  // `Uint8Array<ArrayBufferLike>`, which TS 6 no longer accepts as BodyInit.
-  return new Response(new Uint8Array(rep.data), {
+  return new Response(rep.data, {
     headers: {
       "Content-Type": rep.mediaType,
-      "X-Ikigai-Cache": cacheStatusName(rep),
+      "X-Ikigai-Cache": rep.cacheStatusName,
     },
   });
 }
@@ -98,7 +95,7 @@ export async function createApp(
   // The kernel's catalog, as JSON: what this app could reach, discovered
   // from the running space rather than hard-coded.
   app.get("/catalog", async (c) => {
-    const entries = await kernel.entries() ?? [];
+    const entries = await kernel.entries();
     return c.json(
       entries.map((e) => ({
         pattern: e.pattern,

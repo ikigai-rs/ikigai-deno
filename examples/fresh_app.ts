@@ -36,7 +36,6 @@ import {
   EndpointError,
   type Representation,
 } from "../src/mod.ts";
-import { cacheStatusName } from "./support.ts";
 
 const HTMX = "https://unpkg.com/htmx.org@2.0.6/dist/htmx.min.js";
 
@@ -71,7 +70,7 @@ function page(title: string, ...children: VNode[]): Response {
 
 /** Resolve and render: one fragment shape for every endpoint. */
 function fragment(rep: Representation): Response {
-  const status = cacheStatusName(rep);
+  const status = rep.cacheStatusName;
   return html(
     h("p", null, rep.text, " ", h("small", null, `[cache: ${status}]`)),
     { headers: { "X-Ikigai-Cache": status } },
@@ -177,7 +176,7 @@ export async function createApp(
   }
 
   app.get("/catalog", async () => {
-    const entries = await kernel.entries() ?? [];
+    const entries = await kernel.entries();
     return page(
       "Catalog",
       h("p", null, "Every binding the connected space enumerates."),
