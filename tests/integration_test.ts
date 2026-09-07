@@ -7,6 +7,17 @@
  * binary runs the MISMATCH suite instead — v7 removed the tolerances, so
  * the correct cross-version behavior is a clean error naming both versions,
  * and that is what gets asserted.
+ *
+ * A SECOND probe covers a second host-version axis: the `urn:iki:fn:`
+ * resources named here need `ikigai-cli` 0.1.18 or newer, a floor no
+ * manifest in a Deno package can express. Rather than fail obscurely on an
+ * older host — `no endpoint resolved for urn:iki:fn:toUpper`, with nothing
+ * naming the cause — those tests skip and the banner below says which
+ * version is missing.
+ *
+ * ⚠ Both skips mean a GREEN RUN IS NOT EVIDENCE that the names here are
+ * right. CI has no binary at all and skips everything. The only evidence is
+ * running this file against a real host of the stated version.
  */
 
 import { assert, assertEquals, assertStrictEquals } from "@std/assert";
@@ -19,10 +30,16 @@ import {
 import { connect } from "../src/client.ts";
 import { endpoint, Server } from "../src/serve.ts";
 import { hello, shout } from "../examples/demo.ts";
-import { findIkigai, probeWireVersion, spawnServe } from "./rust_host.ts";
+import {
+  findIkigai,
+  probeIkiFn,
+  probeWireVersion,
+  spawnServe,
+} from "./rust_host.ts";
 
 const IKIGAI = findIkigai();
 const RUST_WIRE_VERSION = await probeWireVersion(IKIGAI);
+const HAS_IKI_FN = await probeIkiFn(IKIGAI);
 const utf8 = new TextDecoder();
 
 if (IKIGAI !== null) {
@@ -32,6 +49,13 @@ if (IKIGAI !== null) {
         ? "running the full suite"
         : "running the version-mismatch suite"),
   );
+  if (!HAS_IKI_FN) {
+    console.error(
+      "integration: this binary does not resolve urn:iki:fn: — it predates " +
+        "ikigai-cli 0.1.18; SKIPPING the urn:iki: tests (install a newer " +
+        "host: `cargo install ikigai-cli --locked`)",
+    );
+  }
 }
 
 /** Full integration: needs a binary speaking OUR wire version. */
@@ -41,6 +65,21 @@ function integration(name: string, fn: () => Promise<void>): void {
     ignore: IKIGAI === null || RUST_WIRE_VERSION !== PROTOCOL_VERSION,
     // The Rust CLI child and the in-process server cross test boundaries in
     // ways the strict sanitizers dislike; cleanup is explicit instead.
+    sanitizeResources: false,
+    sanitizeOps: false,
+    fn,
+  });
+}
+
+/**
+ * Full integration that also names `urn:iki:` resources: needs everything
+ * {@linkcode integration} needs PLUS a host of ikigai-cli 0.1.18 or newer.
+ */
+function fnIntegration(name: string, fn: () => Promise<void>): void {
+  Deno.test({
+    name,
+    ignore: IKIGAI === null || RUST_WIRE_VERSION !== PROTOCOL_VERSION ||
+      !HAS_IKI_FN,
     sanitizeResources: false,
     sanitizeOps: false,
     fn,
@@ -216,16 +255,16 @@ async function withRustServer(
   }
 }
 
-integration("the Deno client drives the Rust kernel", async () => {
+fnIntegration("the Deno client drives the Rust kernel", async () => {
   await withRustServer(async (path) => {
     await using k = await connect(path);
     assertStrictEquals(k.serverVersion, 7);
-    const rep = await k.source("urn:fn:toUpper", { in: "hi" });
+    const rep = await k.source("urn:iki:fn:toUpper", { in: "hi" });
     assertStrictEquals(rep.text, "HI");
     assert(rep.mediaType.startsWith("text/plain"), rep.mediaType);
     const entries = await k.entries();
     assert(entries.some((e) => e.endpoint === "toUpper"));
-    const description = await k.describe("urn:fn:toUpper");
+    const description = await k.describe("urn:iki:fn:toUpper");
     assert(description !== null);
     assertStrictEquals(description["id"], "toUpper");
     const inputs = description["inputs"] as Record<string, unknown>[];
@@ -233,43 +272,54 @@ integration("the Deno client drives the Rust kernel", async () => {
   });
 });
 
-integration("the Deno client sees the Rust cache", async () => {
+fnIntegration("the Deno client sees the Rust cache", async () => {
   await withRustServer(async (path) => {
     await using k = await connect(path);
-    const first = await k.source("urn:fn:toUpper", { in: "cache me" });
+    const first = await k.source("urn:iki:fn:toUpper", { in: "cache me" });
     assertStrictEquals(first.cacheStatus, CacheStatus.Miss);
-    const second = await k.source("urn:fn:toUpper", { in: "cache me" });
+    const second = await k.source("urn:iki:fn:toUpper", { in: "cache me" });
     assertStrictEquals(second.cacheStatus, CacheStatus.Hit);
     assertStrictEquals(
-      await k.isCached("urn:fn:toUpper", { in: "cache me" }),
+      await k.isCached("urn:iki:fn:toUpper", { in: "cache me" }),
       true,
     );
   });
 });
 
-integration("the Deno client traces the Rust kernel", async () => {
+fnIntegration("the Deno client traces the Rust kernel", async () => {
   await withRustServer(async (path) => {
     await using k = await connect(path);
-    const [rep, events] = await k.sourceTraced("urn:fn:toUpper", { in: "hi" });
+    const [rep, events] = await k.sourceTraced("urn:iki:fn:toUpper", {
+      in: "hi",
+    });
     assertStrictEquals(rep.text, "HI");
-    assert(events.some((e) => e.target === "urn:fn:toUpper"));
+    assert(events.some((e) => e.target === "urn:iki:fn:toUpper"));
   });
 });
 
 integration("a Rust kernel's typed error crosses to Deno typed", async () => {
   // v7: an unresolved target arrives as UnresolvedError, taxonomy intact.
+  //
+  // The target is deliberately in a namespace NOTHING binds and nothing
+  // aliases. That is load-bearing, not decoration: a host's alias table
+  // CANONICALIZES before dispatch, so an unresolved `urn:fn:nope` comes back
+  // as `no endpoint resolved for urn:iki:fn:nope` — the IRI this assertion
+  // compares is the host's rewrite of the one we sent. Naming a real,
+  // aliasable namespace here would make an error-taxonomy test hostage to
+  // the host's alias table; `urn:example:` is bound by nobody and rewritten
+  // by nobody, so it round-trips verbatim on every host, old or new.
   await withRustServer(async (path) => {
     await using k = await connect(path);
     let error: unknown = null;
     try {
-      await k.source("urn:fn:nope");
+      await k.source("urn:example:nope");
     } catch (e) {
       error = e;
     }
     assert(error instanceof UnresolvedError, String(error));
-    assertStrictEquals(error.iri, "urn:fn:nope");
+    assertStrictEquals(error.iri, "urn:example:nope");
     assert(
-      error.message.includes("no endpoint resolved for urn:fn:nope"),
+      error.message.includes("no endpoint resolved for urn:example:nope"),
       error.message,
     );
   });

@@ -44,6 +44,14 @@ function b(...pieces: (string | number[])[]): Uint8Array {
   return out;
 }
 
+// The IRI below is an OPAQUE CODEC FIXTURE, not a claim about which namespace
+// is current. Nothing here resolves anything: the wire tests encode and decode
+// bytes. It deliberately keeps the `urn:fn:` spelling that ikigai-python's
+// byte-exact vectors also carry (`b"\x0eurn:fn:toUpper"`), because the length
+// prefix is part of the golden bytes — moving it to `urn:iki:fn:` changes
+// `0x0e` to `0x12` and silently desynchronizes two implementations' shared
+// vectors unless both move in one window. The client-facing docs and the
+// integration tests, which DO resolve, all say `urn:iki:fn:`.
 function upperRequest(): wire.Request {
   return {
     verb: Verb.Source,
