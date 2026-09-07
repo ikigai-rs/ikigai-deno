@@ -297,33 +297,82 @@ fnIntegration("the Deno client traces the Rust kernel", async () => {
   });
 });
 
-integration("a Rust kernel's typed error crosses to Deno typed", async () => {
+fnIntegration("a Rust kernel's typed error crosses to Deno typed", async () => {
   // v7: an unresolved target arrives as UnresolvedError, taxonomy intact.
-  //
-  // The target is deliberately in a namespace NOTHING binds and nothing
-  // aliases. That is load-bearing, not decoration: a host's alias table
-  // CANONICALIZES before dispatch, so an unresolved `urn:fn:nope` comes back
-  // as `no endpoint resolved for urn:iki:fn:nope` — the IRI this assertion
-  // compares is the host's rewrite of the one we sent. Naming a real,
-  // aliasable namespace here would make an error-taxonomy test hostage to
-  // the host's alias table; `urn:example:` is bound by nobody and rewritten
-  // by nobody, so it round-trips verbatim on every host, old or new.
   await withRustServer(async (path) => {
     await using k = await connect(path);
     let error: unknown = null;
     try {
-      await k.source("urn:example:nope");
+      await k.source("urn:iki:fn:nope");
     } catch (e) {
       error = e;
     }
     assert(error instanceof UnresolvedError, String(error));
-    assertStrictEquals(error.iri, "urn:example:nope");
+    assertStrictEquals(error.iri, "urn:iki:fn:nope");
     assert(
-      error.message.includes("no endpoint resolved for urn:example:nope"),
+      error.message.includes("no endpoint resolved for urn:iki:fn:nope"),
       error.message,
     );
   });
 });
+
+/**
+ * ★ The alias protects INVOCATION, not OBSERVATION — and this is the test
+ * with teeth.
+ *
+ * A 0.1.18 host aliases `prefix urn:fn: urn:iki:fn:`, so the OLD spelling
+ * still resolves. But the table CANONICALIZES before the name is ever
+ * observed, so every IRI coming back out — an error's `.iri`, a trace
+ * event's `target`, catalog patterns — is the NEW spelling regardless of
+ * what was sent. A client that sends `urn:fn:` and then matches on what
+ * returns is comparing its own string against the host's rewrite of it.
+ *
+ * That is a distinct failure position from the ones a renaming crate can
+ * see: it is invisible to the crate's own suite (which never crosses a
+ * process) and to host-side tests (which send the canonical name already).
+ * It surfaces only in a polyglot client's integration tests — here. It cost
+ * this repo two silent failures that appeared the moment a 0.1.18 host was
+ * installed, on code nobody had touched.
+ *
+ * So: send the old name, assert the canonical one comes back. Both halves
+ * matter — resolution SUCCEEDS (the alias works) and the observed IRI has
+ * MOVED (the alias canonicalized).
+ */
+fnIntegration(
+  "the alias resolves the old name but returns the new",
+  async () => {
+    await withRustServer(async (path) => {
+      await using k = await connect(path);
+
+      // Invocation: the old spelling still resolves, same answer.
+      const rep = await k.source("urn:fn:toUpper", { in: "hi" });
+      assertStrictEquals(rep.text, "HI");
+
+      // Observation: what comes back is canonical, NOT what was sent.
+      const [, events] = await k.sourceTraced("urn:fn:toUpper", { in: "hi" });
+      assert(
+        events.some((e) => e.target === "urn:iki:fn:toUpper"),
+        `trace targets should be canonical: ${
+          JSON.stringify(events.map((e) => e.target))
+        }`,
+      );
+      assert(
+        !events.some((e) => e.target === "urn:fn:toUpper"),
+        "no trace target should carry the pre-alias spelling",
+      );
+
+      // Same rule on the error path: the unresolved IRI is the rewrite.
+      let error: unknown = null;
+      try {
+        await k.source("urn:fn:nope");
+      } catch (e) {
+        error = e;
+      }
+      assert(error instanceof UnresolvedError, String(error));
+      assertStrictEquals(error.iri, "urn:iki:fn:nope");
+    });
+  },
+);
 
 // -- the version-mismatch suite (an installed v6 binary) -------------------
 

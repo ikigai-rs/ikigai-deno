@@ -50,11 +50,16 @@ ikigai --plain -c 'source urn:iki:fn:toUpper in="hi"'   # -> HI
 ⚠ Not `cargo install ikigai` — that is an unrelated crate by another author, and
 it installs successfully, which is the whole problem.
 
-A 0.1.18 host still answers the old `urn:fn:` spelling: it carries an alias
-table (`prefix urn:fn: urn:iki:fn:`) for the transition window. But the alias
-**canonicalizes before dispatch**, so what comes back — catalog entries, trace
-targets, the IRI in an unresolved error — is always the `urn:iki:` form. Read
-the new name even where you may still write the old one.
+⚠ **The alias protects invocation, not observation.** A 0.1.18 host still
+answers the old `urn:fn:` spelling — it carries an alias table
+(`prefix urn:fn: urn:iki:fn:`) for the transition window — but it
+**canonicalizes before the name is ever observed**. So every IRI coming back
+_out_ is the new spelling no matter what you sent: catalog patterns, a trace
+event's `target`, the `.iri` on an `UnresolvedError`. Client code that sends
+`urn:fn:` and then **matches on what returns** compares its own string against
+the host's rewrite of it, and fails while the resolution itself succeeds. That
+is the sharp edge of the transition window, and it is why this client moved: you
+may still write the old name, but you must read the new one.
 
 Dev setup: `deno task check` runs the CI gates (`deno fmt --check` · `deno lint`
 · `deno check` · `deno test -A`). The integration tests drive the real `ikigai`
