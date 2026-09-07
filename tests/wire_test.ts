@@ -184,7 +184,7 @@ const REPLIES: wire.Reply[] = [
   {
     kind: "entries",
     entries: [
-      wire.spaceEntry(FIXTURE_TARGET, "toUpper"),
+      wire.spaceEntry(FIXTURE_TARGET, "upper"),
       wire.spaceEntry("urn:ts:hello", "hello", "/tmp/ts.sock"),
     ],
   },
