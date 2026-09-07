@@ -70,8 +70,8 @@ curl -i 'localhost:8000/upper?text=roc'   # X-Ikigai-Cache: HIT — the kernel c
 ```
 
 Nothing in the app changed — same code, same IRIs; only `IKIGAI_SOCKET` moved.
-`/catalog` now lists the kernel's whole space (`urn:fn:*`, `urn:kernel:*`, …)
-with the `urn:ts:*` entries composed in.
+`/catalog` now lists the kernel's whole space (`urn:iki:fn:*`, `urn:kernel:*`,
+…) with the `urn:ts:*` entries composed in.
 
 ## Connection lifecycle
 

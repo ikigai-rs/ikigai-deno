@@ -7,6 +7,13 @@
  * older (v6) binary the suite instead asserts the CLEAN MISMATCH — the
  * hello names both versions, which is exactly the behavior the tolerance
  * removal promises.
+ *
+ * There is a SECOND host-version axis, and it is the one no manifest can
+ * hold: the resources this suite names live in `urn:iki:`, which arrived in
+ * `ikigai-cli` 0.1.18. Deno resolves this package, never the host binary, so
+ * that floor exists only as a runtime fact — {@linkcode probeIkiFn} is where
+ * it gets stated mechanically instead of in prose that nobody reads at the
+ * moment it matters.
  */
 
 import * as wire from "../src/wire.ts";
@@ -98,5 +105,27 @@ export async function probeWireVersion(
       await child.status;
     }
     Deno.removeSync(dir, { recursive: true });
+  }
+}
+
+/**
+ * Whether the installed binary resolves the `urn:iki:` namespace — i.e. is it
+ * `ikigai-cli` 0.1.18 or newer.
+ *
+ * Cheap by design: one `-c` invocation, no socket, no serve. A pre-0.1.18
+ * binary answers `no endpoint resolved for urn:iki:fn:toUpper` and exits
+ * non-zero, which is exactly the signal. `false` when no binary exists.
+ */
+export async function probeIkiFn(ikigai: string | null): Promise<boolean> {
+  if (ikigai === null) return false;
+  try {
+    const { success } = await new Deno.Command(ikigai, {
+      args: ["--plain", "-c", 'source urn:iki:fn:toUpper in="hi"'],
+      stdout: "null",
+      stderr: "null",
+    }).output();
+    return success;
+  } catch {
+    return false;
   }
 }

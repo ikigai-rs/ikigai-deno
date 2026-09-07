@@ -7,7 +7,7 @@
  * import { connect } from "@ikigai/wire/client";
  *
  * await using k = await connect();
- * const rep = await k.source("urn:fn:toUpper", { in: "hi" });
+ * const rep = await k.source("urn:iki:fn:toUpper", { in: "hi" });
  * rep.text; // "HI"
  * ```
  *

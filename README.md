@@ -32,10 +32,40 @@ path or URL:
 import { connect, endpoint, serve } from "./src/mod.ts";
 ```
 
+### The host this README's examples require: `ikigai-cli` ≥ 0.1.18
+
+The client examples below name resources in the **`urn:iki:`** namespace
+(`urn:iki:fn:toUpper`). That namespace arrived in **`ikigai-cli` 0.1.18**, and
+**nothing here can express that floor mechanically** — Deno resolves this
+package, not the host binary, so there is no manifest field to put it in. On an
+older host, a line copy-pasted from below fails with **"no endpoint resolved for
+`urn:iki:fn:toUpper`"** and nothing points at the cause. That message _is_ the
+symptom of too old a host.
+
+```sh
+cargo install ikigai-cli --locked     # the crate is `ikigai-cli`; the BINARY is `ikigai`
+ikigai --plain -c 'source urn:iki:fn:toUpper in="hi"'   # -> HI
+```
+
+⚠ Not `cargo install ikigai` — that is an unrelated crate by another author, and
+it installs successfully, which is the whole problem.
+
+⚠ **The alias protects invocation, not observation.** A 0.1.18 host still
+answers the old `urn:fn:` spelling — it carries an alias table
+(`prefix urn:fn: urn:iki:fn:`) for the transition window — but it
+**canonicalizes before the name is ever observed**. So every IRI coming back
+_out_ is the new spelling no matter what you sent: catalog patterns, a trace
+event's `target`, the `.iri` on an `UnresolvedError`. Client code that sends
+`urn:fn:` and then **matches on what returns** compares its own string against
+the host's rewrite of it, and fails while the resolution itself succeeds. That
+is the sharp edge of the transition window, and it is why this client moved: you
+may still write the old name, but you must read the new one.
+
 Dev setup: `deno task check` runs the CI gates (`deno fmt --check` · `deno lint`
 · `deno check` · `deno test -A`). The integration tests drive the real `ikigai`
 binary and skip themselves when it is not on `PATH` (or at
-`~/.cargo/bin/ikigai`).
+`~/.cargo/bin/ikigai`) — and the `urn:iki:fn:` ones skip again, loudly, when the
+binary predates 0.1.18, so an old host reports a floor rather than a failure.
 
 ## Client (the script front door)
 
@@ -43,17 +73,17 @@ binary and skip themselves when it is not on `PATH` (or at
 import { connect } from "@ikigai/wire";
 
 await using k = await connect(); // default socket path, same as the Rust CLI
-const rep = await k.source("urn:fn:toUpper", { in: "hi" });
+const rep = await k.source("urn:iki:fn:toUpper", { in: "hi" });
 rep.text; // "HI"
 rep.mediaType; // "text/plain;charset=utf-8"
 rep.cacheStatus; // how the server's cache answered (Hit/Miss/Uncacheable)
 await k.sink("urn:file:notes.txt", "content goes as the `content` arg");
 await k.exists("urn:file:notes.txt"); // "true" — the file the sink just wrote
-await k.meta("urn:fn:toUpper"); // self-description, text/turtle by default
-await k.describe("urn:fn:toUpper"); // the JSON Meta face, parsed — ArgSpecs and all
+await k.meta("urn:iki:fn:toUpper"); // self-description, text/turtle by default
+await k.describe("urn:iki:fn:toUpper"); // the JSON Meta face, parsed — ArgSpecs and all
 await k.entries(); // the catalog: [{ pattern, endpoint, origin }]
-await k.isCached("urn:fn:toUpper", { in: "hi" });
-await k.sourceTraced("urn:fn:toUpper", { in: "hi" }); // [rep, TraceEvent[]]
+await k.isCached("urn:iki:fn:toUpper", { in: "hi" });
+await k.sourceTraced("urn:iki:fn:toUpper", { in: "hi" }); // [rep, TraceEvent[]]
 k.close(); // or let `await using` do it
 ```
 
