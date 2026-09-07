@@ -46,21 +46,35 @@ function b(...pieces: (string | number[])[]): Uint8Array {
 
 // The IRI below is an OPAQUE CODEC FIXTURE, not a claim about which namespace
 // is current. Nothing here resolves anything: the wire tests encode and decode
-// bytes. It deliberately keeps the `urn:fn:` spelling that ikigai-python's
-// byte-exact vectors also carry (`b"\x0eurn:fn:toUpper"`), because the length
-// prefix is part of the golden bytes — moving it to `urn:iki:fn:` changes
-// `0x0e` to `0x12` and silently desynchronizes two implementations' shared
-// vectors unless both move in one window. The client-facing docs and the
-// integration tests, which DO resolve, all say `urn:iki:fn:`.
+// bytes. It lives under `urn:test:` — the namespace ikigai-core #102 and
+// ikigai-cli #310 reserved for fixtures — so that renaming a real module never
+// drags these vectors along again; a fixture in a module's live namespace moves
+// on every rename, and moving it silently desynchronizes the implementations
+// that lock the same bytes. The client-facing docs and the integration tests,
+// which DO resolve, say `urn:iki:fn:`; that is a different thing and stays.
+//
+// The length prefix is part of the golden bytes, so the string and the byte
+// have to be edited together. The guard test below pins both, because a string
+// edit that misses the prefix decodes a truncated IRI and the failure does not
+// name the cause.
+const FIXTURE_TARGET = "urn:test:upper";
+
 function upperRequest(): wire.Request {
   return {
     verb: Verb.Source,
-    target: "urn:fn:toUpper",
+    target: FIXTURE_TARGET,
     args: { in: inline("hi") },
   };
 }
 
-// --- byte-exact fixtures (the same vectors the Rust and Python suites lock) ---
+// --- byte-exact fixtures (the same vectors the Rust and Python suites lock:
+//     ikigai-cli/crates/ikigai-wire/src/lib.rs and ikigai-python's
+//     tests/test_wire.py) ---
+
+Deno.test("the shared fixture IRI and its golden length prefix agree", () => {
+  assertStrictEquals(FIXTURE_TARGET, "urn:test:upper");
+  assertStrictEquals(new TextEncoder().encode(FIXTURE_TARGET).length, 0x0e);
+});
 
 Deno.test("an Entries call is one byte", () => {
   assertEquals(wire.encodeCall({ kind: "entries" }), b([0x02]));
@@ -71,7 +85,7 @@ Deno.test("Issue call golden bytes", () => {
     [0x00], // Call::Issue
     [0x00], // Verb::Source (variant index 0, NOT the repr(u8) value 1)
     [0x0e],
-    "urn:fn:toUpper", // Iri newtype = string
+    "urn:test:upper", // Iri newtype = string
     [0x01], // args: 1 entry
     [0x02],
     "in", // key
@@ -170,7 +184,7 @@ const REPLIES: wire.Reply[] = [
   {
     kind: "entries",
     entries: [
-      wire.spaceEntry("urn:fn:toUpper", "toUpper"),
+      wire.spaceEntry(FIXTURE_TARGET, "toUpper"),
       wire.spaceEntry("urn:ts:hello", "hello", "/tmp/ts.sock"),
     ],
   },
@@ -201,7 +215,7 @@ const REPLIES: wire.Reply[] = [
     cacheStatus: CacheStatus.Miss,
     events: [
       {
-        target: "urn:fn:toUpper",
+        target: FIXTURE_TARGET,
         thread: "ikigai-sched-0",
         started: null,
         ended: null,
