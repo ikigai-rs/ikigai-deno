@@ -193,10 +193,10 @@ your `DeniedError` as final, and a zod validation failure crosses as a real
 ### zod → ArgSpec (declare the contract once)
 
 TS types are erased at runtime, so L0 ArgSpecs are explicit spec data. The
-`./zod` entry point is the schema-derived rung: a `z.object(...)` is the ONE
-statement of the input contract — the ArgSpecs derive from it, the same schema
-validates every dispatch (before the handler), and the handler receives the
-parsed, typed output:
+`./zod` entry point closes that gap: a `z.object(...)` is the ONE statement of
+the input contract — the ArgSpecs derive from it, the same schema validates
+every dispatch (before the handler), and the handler receives the parsed, typed
+output:
 
 ```ts
 import { z } from "zod";
@@ -229,7 +229,7 @@ on any contradiction.
 - Receive their declared args as an object (utf-8 strings; raw `Uint8Array` when
   not valid utf-8). By-reference arguments (`ArgRef::Reference` / `Content`) are
   refused loudly (as a typed `InvalidArgument`): an L0 peer has no back-channel
-  to the host to dereference them. Handlers from the `./zod` rung instead
+  to the host to dereference them. Handlers registered through `./zod` instead
   receive the schema's parsed, typed output.
 - Return `string` or `Uint8Array` (typed by the endpoint's declared `output`), a
   `[value, mediaType]` tuple, or a full `Representation`. Async handlers are
