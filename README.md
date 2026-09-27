@@ -224,13 +224,101 @@ error naming the field; wire text is coerced by the declared type first (`"3.5"`
 explicit specs win the describe face but are checked against the schema, loudly,
 on any contradiction.
 
+### Families and verbs
+
+Two door features beyond "one exact IRI, one Source":
+
+**A family** is a door over a URI template. It answers every IRI the template
+matches, and each `{variable}` reaches the handler by name, beside the
+arguments:
+
+```ts
+import { endpoint } from "@ikigai/wire";
+
+const echo = endpoint("urn:ts:echo:{msg}", {
+  bindings: { msg: { summary: "what to say" } },
+}, ({ msg }) => msg); // urn:ts:echo:hi -> "hi"
+```
+
+**A multi-verb door** gives each verb its own contract — core's per-verb
+`ActionSpec`. `family()` returns a builder; chain the verbs it answers:
+
+```ts
+import { family, NotFoundError } from "@ikigai/wire";
+
+const marks = new Map<string, string>();
+const cell = family("urn:ts:stored:{x}:{y}", { id: "stored" })
+  .source({ cacheable: true }, ({ x, y }) => {
+    const mark = marks.get(`${x},${y}`);
+    if (mark === undefined) throw new NotFoundError(`nothing at ${x},${y}`);
+    return mark;
+  })
+  .sink({}, ({ x, y, content }) => (marks.set(`${x},${y}`, `${content}`), "ok"))
+  .delete({}, ({ x, y }) => (marks.delete(`${x},${y}`), "ok"));
+```
+
+The rules, stated once:
+
+- **Matching is core's `UriTemplate`, ported exactly** (`src/template.ts` states
+  it): a variable name is ASCII letters, digits and `_`; a variable followed by
+  literal text captures up to the LEFTMOST next occurrence of that text (lazy,
+  no backtracking); a final variable takes the whole remainder, `:` included; an
+  empty capture is no match; adjacent variables (`{a}{b}`) are refused at
+  declaration. Values are raw — no percent-decoding.
+- **Order**: doors are tried in declaration order and the first match answers,
+  like an `EndpointSpace`. Two doors with the same pattern text are refused.
+- **The catalog lists the TEMPLATE** (`urn:ts:stored:{x}:{y} → stored`), so a
+  host's `list`, its topology and the book's URN gate see the family.
+- **Describe**: every variable is a required input with `source: "binding"`. A
+  flat `endpoint()` lists them with its args (the `ttt-cell` shape); a
+  `family()` puts them on every action, because an explicit action inherits
+  nothing from the flat fields. Meta answers on ANY member, before a binding is
+  validated — the host describes a template row by Meta on a probe expansion
+  (`{x}` → `probe`).
+- **Sink** receives the body as `content` — declared for you (required) if the
+  Sink does not declare it, so the pipeline rule holds.
+- **Exists**, unless declared, answers "would Source succeed": the Source
+  handler runs, success is `true`, a `NotFoundError` is `false`, any other
+  failure crosses as itself. A family with no Source and no Exists refuses
+  Exists. (A flat `endpoint()` keeps its L0 Exists: `true`, handler not run.)
+- **Cacheability is per verb**: a Source (or explicit Exists) may be
+  `cacheable`; a Sink or Delete answer is never cacheable, even if the handler
+  builds a `Representation` that says otherwise. The HOST kernel cuts the
+  target's cached read after a Sink/Delete through its mount — nothing to do
+  here.
+- **An undeclared verb** is a typed refusal naming the ones the door answers:
+  ``verb Delete is not supported by `ro` (it answers Source, Exists, Meta)``.
+- **Alias mounts**: both forms answer, templates included — `--override`
+  forwards `urn:ts:stored:1:2`, `--mount urn:ts:=` forwards `urn:stored:1:2`.
+- A variable and an argument with the same name are refused at declaration: a
+  name has one source. (`./zod` endpoints take exact IRIs only.)
+
+The worked example is the ikigai book's tic-tac-toe atom,
+[`examples/tictactoe_store.ts`](examples/tictactoe_store.ts): the stored cell
+`urn:iki:tutorial:ttt:stored:{x}:{y}`, served from Deno to a Rust host that
+keeps everything above it (the platonic cell, lines, board, rules):
+
+```sh
+deno run -A examples/tictactoe_store.ts /tmp/ttt.sock
+ikigai --override urn:iki:tutorial:ttt:stored:=/tmp/ttt.sock
+# ikigai> sink urn:iki:tutorial:ttt:stored:1:1 X      ok
+# ikigai> source urn:iki:tutorial:ttt:stored:1:1      X  [computed]
+# ikigai> source urn:iki:tutorial:ttt:stored:1:1      X  [cached]
+# ikigai> sink urn:iki:tutorial:ttt:stored:1:1 O      ok (cuts the cached read)
+# ikigai> source urn:iki:tutorial:ttt:stored:1:1      O  [computed]
+```
+
+`tests/tictactoe_store_test.ts` runs that round trip against the installed host
+and counts the reads that reached Deno.
+
 ### Handlers
 
 - Receive their declared args as an object (utf-8 strings; raw `Uint8Array` when
-  not valid utf-8). By-reference arguments (`ArgRef::Reference` / `Content`) are
-  refused loudly (as a typed `InvalidArgument`): an L0 peer has no back-channel
-  to the host to dereference them. Handlers registered through `./zod` instead
-  receive the schema's parsed, typed output.
+  not valid utf-8), plus a family's template variables (always strings).
+  By-reference arguments (`ArgRef::Reference` / `Content`) are refused loudly
+  (as a typed `InvalidArgument`): an L0 peer has no back-channel to the host to
+  dereference them. Handlers registered through `./zod` instead receive the
+  schema's parsed, typed output.
 - Return `string` or `Uint8Array` (typed by the endpoint's declared `output`), a
   `[value, mediaType]` tuple, or a full `Representation`. Async handlers are
   fine.

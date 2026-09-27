@@ -337,3 +337,14 @@ Deno.test("zod: bytes into a text schema are refused naming the field", async ()
     assert(err.message.includes("not valid UTF-8"), err.message);
   });
 });
+
+Deno.test("zod: a template IRI is refused at declaration (a variable is not a zod field)", () => {
+  assertThrows(
+    () =>
+      endpoint("urn:ts:z:{id}", {
+        input: z.object({ who: z.string() }),
+      }, ({ who }) => who),
+    Error,
+    "a zod endpoint takes an exact IRI, not a template",
+  );
+});
