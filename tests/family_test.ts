@@ -451,3 +451,93 @@ Deno.test("declaration refusals: bad templates, collisions, doubles", () => {
     "two endpoints answer urn:ts:f:{x}",
   );
 });
+
+// -- lookup order: declared forms, then stripped forms (ledger item 580) ----
+
+Deno.test("lookup: an alias form never swallows a declared name", async () => {
+  // A's STRIPPED form `urn:{x}` would match B's declared `urn:b:c`; declared
+  // forms are tried first (alias forms first only on an alias-mode
+  // connection), so a verbatim caller reaches B. Python's
+  // test_an_alias_form_never_swallows_a_declared_name, one for one.
+  const a = endpoint("urn:a:{x}", { id: "a" }, ({ x }) => `a:${x}`);
+  const b = endpoint("urn:b:c", { id: "b" }, () => "b");
+  await withServer([a, b], async (path) => {
+    await using verbatim = await connect(path);
+    assertStrictEquals((await verbatim.source("urn:b:c")).text, "b");
+    // In STRIPPED form the two namespaces genuinely collide — `urn:{x}` and
+    // `urn:c` are one space once `urn:a:`/`urn:b:` are gone — and
+    // declaration order decides. The known limit of first-segment
+    // stripping (ledger item 578): mount a family with --override.
+    await using alias = await connect(path, { mode: HelloMode.Alias });
+    assertStrictEquals((await alias.source("urn:c")).text, "a:c");
+  });
+  // The same holds for a direct programmatic lookup.
+  const space = new Space([a, b]);
+  assertStrictEquals(space.lookup("urn:b:c")?.def, b);
+  assertEquals(space.lookup("urn:c", true)?.bindings, { x: "c" });
+});
+
+Deno.test("lookup: an alias-mode connection tries stripped forms first", async () => {
+  // `urn:ts:note:{k}` strips to `urn:note:{k}`, which a later door declares
+  // verbatim. The alias connection is forwarding stripped names, so
+  // `urn:note:1` from it means the FIRST door; a verbatim caller means the
+  // second.
+  const mounted = family("urn:ts:note:{k}", { id: "mounted" })
+    .source(({ k }) => `mounted:${k}`);
+  const bare = family("urn:note:{k}", { id: "bare" })
+    .source(({ k }) => `bare:${k}`);
+  await withServer([mounted, bare], async (path) => {
+    await using verbatim = await connect(path);
+    assertStrictEquals((await verbatim.source("urn:note:1")).text, "bare:1");
+    assertStrictEquals(
+      (await verbatim.source("urn:ts:note:1")).text,
+      "mounted:1",
+    );
+    await using alias = await connect(path, { mode: HelloMode.Alias });
+    assertStrictEquals((await alias.source("urn:note:1")).text, "mounted:1");
+  });
+});
+
+Deno.test("lookup: a declared pattern equal to another door's stripped one is accepted, both directions", async () => {
+  // The cross-form case used to be refused at construction. With the two
+  // passes separate it resolves cleanly, whichever door is declared first:
+  // the declared door answers a verbatim caller, the stripped one an
+  // alias-mode connection. (Exact IRIs: a bare TEMPLATE like `urn:kv:{k}`
+  // strips to `urn:{k}`, which swallows every stripped name — the
+  // within-stripped collision of ledger item 578, not this case.)
+  const mounted = endpoint("urn:ts:p:q", { id: "mounted" }, () => "mounted");
+  const bare = endpoint("urn:p:q", { id: "bare" }, () => "bare");
+  for (const order of [[mounted, bare], [bare, mounted]]) {
+    await withServer(order, async (path) => {
+      await using verbatim = await connect(path);
+      assertStrictEquals((await verbatim.source("urn:p:q")).text, "bare");
+      assertStrictEquals((await verbatim.source("urn:ts:p:q")).text, "mounted");
+      await using alias = await connect(path, { mode: HelloMode.Alias });
+      assertStrictEquals((await alias.source("urn:p:q")).text, "mounted");
+      assertStrictEquals((await alias.source("urn:q")).text, "bare");
+    });
+    const space = new Space(order);
+    assertStrictEquals(space.lookup("urn:p:q")?.def, bare);
+    assertStrictEquals(space.lookup("urn:p:q", true)?.def, mounted);
+  }
+  // Within ONE form the same text twice is still refused: two declared…
+  assertThrows(
+    () =>
+      new Space([
+        endpoint("urn:ts:dup", { id: "one" }, () => "1"),
+        endpoint("urn:ts:dup", { id: "two" }, () => "2"),
+      ]),
+    Error,
+    "two endpoints answer urn:ts:dup: one and two",
+  );
+  // …or two stripped.
+  assertThrows(
+    () =>
+      new Space([
+        endpoint("urn:ts:x", { id: "one" }, () => "1"),
+        endpoint("urn:other:x", { id: "two" }, () => "2"),
+      ]),
+    Error,
+    "two endpoints answer urn:x: one and two",
+  );
+});

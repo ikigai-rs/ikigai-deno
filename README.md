@@ -290,6 +290,26 @@ The rules, stated once:
   ``verb Delete is not supported by `ro` (it answers Source, Exists, Meta)``.
 - **Alias mounts**: both forms answer, templates included — `--override`
   forwards `urn:ts:stored:1:2`, `--mount urn:ts:=` forwards `urn:stored:1:2`.
+  The forms are tried in two passes, never door by door: every door's declared
+  pattern first, then every door's stripped one (each pass in declaration
+  order), so a stripped form cannot swallow another door's declared name — with
+  `urn:a:{x}` declared before `urn:b:c`, a verbatim `urn:b:c` reaches `urn:b:c`,
+  not `urn:{x}`. A connection whose hello declared an alias mount reverses the
+  passes (stripped first). Same pattern text twice is refused only within one
+  form; a declared pattern equal to another door's stripped one is allowed, and
+  each answers its own kind of connection. ⚠ Stripped forms can still collide
+  among themselves (`urn:a:{x}` and `urn:b:c` both answer a stripped `urn:c`,
+  and declaration order decides) — first-segment stripping cannot tell them
+  apart, so mount a family with `--override <its prefix>=<socket>`. This is the
+  Python face's rule, matched exactly.
+- **Bindings arrive as raw strings — the one intended difference from the Python
+  face.** Python coerces a template binding by its annotation, so an `int`
+  binding refuses a second spelling (`01`, `+1`, `-0`) library-wide, because a
+  binding is part of the name and two names for one resource are two cache
+  threads. JavaScript has no annotation to coerce by, and a `number` loses
+  integers past 2^53, so here a store checks its own coordinates — as
+  `examples/tictactoe_store.ts` does, with `BigInt` for the i64 range. (The
+  reasoning is recorded as ikigai ledger item 580.)
 - A variable and an argument with the same name are refused at declaration: a
   name has one source. (`./zod` endpoints take exact IRIs only.)
 
