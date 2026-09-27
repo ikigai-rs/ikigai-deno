@@ -66,6 +66,7 @@ import {
   type Handler,
   type HandlerResult,
 } from "./serve.ts";
+import { UriTemplate } from "./template.ts";
 import { InvalidArgumentError } from "./wire.ts";
 
 const XSD = "http://www.w3.org/2001/XMLSchema#";
@@ -300,12 +301,23 @@ function assertSpecsMatch(
  *
  * `options.args` may still be given; it is checked against the derivation
  * (loudly) and then wins as the describe face.
+ *
+ * The IRI must be EXACT: a zod object validates by-value arguments, and a
+ * template variable is not one (`z.object` would strip it before the
+ * handler saw it). Declare a family with `endpoint`/`family` from
+ * `./serve.ts`.
  */
 export function endpoint<S extends z.ZodObject>(
   iri: string,
   options: ZodEndpointOptions<S>,
   handler: ZodHandler<S>,
 ): EndpointDef {
+  if (!UriTemplate.parse(iri).isExact) {
+    throw new Error(
+      `endpoint ${iri}: a zod endpoint takes an exact IRI, not a template — ` +
+        "declare a family with `endpoint`/`family` from the serve module",
+    );
+  }
   const { input, ...rest } = options;
   const derivation = derive(input);
   let specs: readonly ArgSpec[] = derivation.specs;

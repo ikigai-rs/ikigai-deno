@@ -172,7 +172,7 @@ Deno.test("exists answers true; unsupported verbs are named", async () => {
     await assertRejects(
       () => k.delete("urn:ts:hello"),
       EndpointError,
-      "verb Delete is not supported by `hello` (a single-verb Source endpoint)",
+      "verb Delete is not supported by `hello` (it answers Source, Exists, Meta)",
     );
   });
 });
