@@ -223,7 +223,7 @@ export class Client {
       let timer: ReturnType<typeof setTimeout> | undefined;
       if (this.#timeoutMs !== null) {
         timer = setTimeout(() => {
-          // A Deno read cannot be cancelled directly; closing the connection
+          // A Deno read cannot be canceled directly; closing the connection
           // rejects it, and #timedOut names the reason.
           this.#timedOut = true;
           try {
@@ -475,7 +475,7 @@ async function handshake(
   let timer: ReturnType<typeof setTimeout> | undefined;
   if (timeoutMs !== null) {
     timer = setTimeout(() => {
-      // A Deno read cannot be cancelled directly; closing the connection
+      // A Deno read cannot be canceled directly; closing the connection
       // rejects it, and `timedOut` names the reason.
       timedOut = true;
       try {
