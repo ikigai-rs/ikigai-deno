@@ -35,7 +35,9 @@
  * `urn:ts:hello` to `urn:hello` before forwarding, and re-prefixes catalog
  * patterns coming back. This server therefore answers BOTH the declared IRI
  * and its alias-stripped form — for a template, both the declared template
- * and its stripped form. Since wire v6 the client's hello says which form
+ * and its stripped form. Every door's declared form is tried before any
+ * door's stripped form (reversed on an alias-mode connection), so a stripped
+ * form never swallows a declared name — see {@linkcode Space}. Since wire v6 the client's hello says which form
  * its `entries` wants, per connection — and since v7 the hello is REQUIRED
  * (a first frame without it is refused), so every served connection's form
  * is known, never guessed.
@@ -604,8 +606,16 @@ export abstract class ServedDef {
     return this.#aliasTemplate?.source ?? null;
   }
 
+  /** {@linkcode aliasIri} as a parsed template (`null` when there is none). */
+  get aliasTemplate(): UriTemplate | null {
+    return this.#aliasTemplate;
+  }
+
   /**
-   * The bindings if `target` is this door's IRI (either form), else null.
+   * The bindings if `target` is this door's IRI (either form, declared
+   * first), else null. This is ONE door's view; a {@linkcode Space} does
+   * not route by it, because across doors every declared form must be
+   * tried before any stripped one (see {@linkcode Space.lookup}).
    */
   match(target: string): Record<string, string> | null {
     return this.template.match(target) ??
@@ -1008,41 +1018,71 @@ export function family(pattern: string, options: FamilyOptions = {}): Family {
 // Dispatch
 // ---------------------------------------------------------------------------
 
+/** One form of one door, as a {@linkcode Space} routes it. */
+interface Route {
+  readonly template: UriTemplate;
+  readonly def: ServedDef;
+}
+
+/**
+ * Add `def`'s `template` to one form's routes, refusing the same pattern
+ * text from a second door WITHIN that form.
+ */
+function route(routes: Route[], template: UriTemplate, def: ServedDef): void {
+  const held = routes.find((r) =>
+    r.def !== def && r.template.source === template.source
+  );
+  if (held !== undefined) {
+    throw new Error(
+      `two endpoints answer ${template.source}: ${held.def.id} and ${def.id}`,
+    );
+  }
+  routes.push({ template, def });
+}
+
 /**
  * The served resolution space: door lookup + call dispatch.
  *
- * Doors are tried in DECLARATION ORDER and the first whose pattern matches
- * the target answers (each door tries its declared form, then its
- * alias-stripped form) — core `EndpointSpace`'s rule, so an exact door
- * declared after a template that also matches it is shadowed, exactly as
- * it would be in a Rust kernel. Two doors declaring the SAME pattern text
- * (in either form) are refused at construction.
+ * **Routing mirrors core `EndpointSpace`: the first declared door whose
+ * pattern matches wins** — declare a specific door before a general template
+ * that would also match it; a later door it shadows is left unreachable,
+ * exactly as in a Rust kernel.
+ *
+ * Each door is matched in two forms, its declared pattern and its
+ * alias-stripped one, in two SEPARATE passes — every declared form (in
+ * declaration order), then every stripped form (in declaration order) — so
+ * a stripped form can never shadow another door's declared name: with
+ * `urn:a:{x}` declared before `urn:b:c`, a verbatim `urn:b:c` reaches the
+ * second door rather than the first's stripped `urn:{x}`. A connection
+ * whose hello declared an ALIAS mount is forwarding stripped names, so for
+ * it the passes reverse: stripped forms first, then declared.
+ *
+ * The same pattern text twice WITHIN one form (two declared, or two
+ * stripped) is refused at construction. A declared pattern equal to another
+ * door's stripped pattern is not: the passes keep them apart — the declared
+ * door answers a verbatim caller, the stripped one an alias-mode connection.
  */
 export class Space {
   readonly stripAlias: boolean;
   #defs: readonly ServedDef[];
+  #declared: readonly Route[];
+  #aliased: readonly Route[];
 
   constructor(
     endpoints: readonly ServedDef[],
     options: { stripAlias?: boolean } = {},
   ) {
     this.stripAlias = options.stripAlias ?? true;
-    const byPattern = new Map<string, ServedDef>();
-    const bind = (pattern: string, d: ServedDef): void => {
-      const held = byPattern.get(pattern);
-      if (held !== undefined && held !== d) {
-        throw new Error(
-          `two endpoints answer ${pattern}: ${held.id} and ${d.id}`,
-        );
-      }
-      byPattern.set(pattern, d);
-    };
+    const declared: Route[] = [];
+    const aliased: Route[] = [];
+    for (const d of endpoints) route(declared, d.template, d);
     for (const d of endpoints) {
-      bind(d.iri, d);
-      const alias = d.aliasIri;
-      if (alias !== null) bind(alias, d);
+      const alias = d.aliasTemplate;
+      if (alias !== null) route(aliased, alias, d);
     }
     this.#defs = [...endpoints];
+    this.#declared = declared;
+    this.#aliased = aliased;
   }
 
   /**
@@ -1069,12 +1109,15 @@ export class Space {
     if (call.kind === "isCached") {
       return { kind: "cached", cached: false }; // this peer keeps no cache
     }
+    // Only a connection that DECLARED an alias mount tries stripped forms
+    // first; a direct programmatic call (`null`) is a verbatim caller.
+    const aliasFirst = stripAlias === true;
     if (call.kind === "issue" || call.kind === "issueAs") {
-      return await this.#resolve(call.request);
+      return await this.#resolve(call.request, aliasFirst);
     }
     // issueTraced
     const started = Date.now();
-    const reply = await this.#resolve(call.request);
+    const reply = await this.#resolve(call.request, aliasFirst);
     const ended = Date.now();
     if (reply.kind !== "resolved") return reply;
     const capability = call.capability;
@@ -1099,19 +1142,29 @@ export class Space {
     };
   }
 
-  /** The first door (in declaration order) matching `target`, if any. */
+  /**
+   * The first door matching `target`, if any: every declared form, then
+   * every stripped form, each pass in declaration order — reversed when
+   * `aliasFirst` (a connection whose hello declared an alias mount).
+   */
   lookup(
     target: string,
+    aliasFirst = false,
   ): { def: ServedDef; bindings: Record<string, string> } | null {
-    for (const def of this.#defs) {
-      const bindings = def.match(target);
-      if (bindings !== null) return { def, bindings };
+    const passes = aliasFirst
+      ? [this.#aliased, this.#declared]
+      : [this.#declared, this.#aliased];
+    for (const routes of passes) {
+      for (const { template, def } of routes) {
+        const bindings = template.match(target);
+        if (bindings !== null) return { def, bindings };
+      }
     }
     return null;
   }
 
-  async #resolve(request: Request): Promise<Reply> {
-    const hit = this.lookup(request.target);
+  async #resolve(request: Request, aliasFirst: boolean): Promise<Reply> {
+    const hit = this.lookup(request.target, aliasFirst);
     if (hit === null) {
       // A real Unresolved (v7): the host-side client rebuilds the same
       // variant — and the same rendering — the Rust kernel would produce.
