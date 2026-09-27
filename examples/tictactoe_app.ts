@@ -10,8 +10,8 @@
  * its IPC socket:
  *
  * ```sh
- * ttt-host --socket /tmp/ttt-host.sock                  # games a and b
- * deno run -A examples/tictactoe_app.ts --socket /tmp/ttt-host.sock
+ * ttt-host --socket /tmp/ttt-host.sock                  # games a and b, :8070
+ * deno run -A examples/tictactoe_app.ts --socket /tmp/ttt-host.sock   # :8071
  * open http://127.0.0.1:8071/game/a/
  * ```
  *
@@ -37,6 +37,13 @@
  *   write goes THROUGH the host (a Sink to `move:{x}:{y}` / `reset`), and the
  *   answer is the `reply` template filled here. A refused move is answered,
  *   not failed: the refusal's text, as the Rust view shows it.
+ *
+ * On those paths the app answers what `ttt-host` answers — status and body,
+ * the refusals included (a coordinate not in its plain form, a game the host
+ * does not serve, a method the view does not take); see {@linkcode handler}.
+ * Every other path is `404 not found`: the app serves views, not the host's
+ * raw resources. The flags are the host's too: `--socket <path>` and
+ * `--http <addr>` (default `127.0.0.1:8071`; the host takes 8070).
  *
  * A game `id` is reached as `urn:game:{id}:iki:tutorial:ttt:{name}`, the
  * host's gateway names, which carry the game as a VALUE the host turns into
@@ -286,16 +293,15 @@ export const PAGE_CSP =
 
 /**
  * The files the page loads, vendored byte-for-byte from ikigai-tutorial at
- * `9a95b0c` — the commit `ttt-host` embeds them from, so the parity test can
- * compare them with the host's (a test also pins each sha256; the CSS
- * comments say "colour" there, and are copied as they are): htmx 2.0.4 (0BSD) from
- * `books/ikigai/src/vendor/htmx-2.0.4.min.js`, sha256
+ * `31daf4e` — the commit the prebuilt `ttt-host` is built from, so the parity
+ * test can compare them with the host's (a test also pins each sha256):
+ * htmx 2.0.4 (0BSD) from `books/ikigai/src/vendor/htmx-2.0.4.min.js`, sha256
  * `e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447`; the ONE
  * stylesheet for the markup, `books/ikigai/css/ttt.css`, sha256
- * `4955aadc02365f9eb9e5a71038a9dbb541647ee626eaad8db45ffd32fa845a53`; and
+ * `f93bde4b6dacb82b085d88c8cf33c899eb3dd435dd64acd5e1e19c63be04f09b`; and
  * `ttt-host`'s `static/host.css` (the colors `ttt.css` reads, which the book
  * gets from mdbook), sha256
- * `4427125dde3c767472ceeb387e7bebf7459130ae6b9044ac00e1611a0c30fead`.
+ * `79437443cd22e56d183ebf5b4a6de625e72354d38e8a39e54894bf0dc19f27ac`.
  */
 export const STATIC: Record<string, { file: string; type: string }> = {
   "/static/htmx-2.0.4.min.js": {
@@ -358,113 +364,320 @@ ${shell}
 `;
 }
 
-const HTML = "text/html; charset=utf-8";
+/** The media type of a page and a fragment — `ttt-host`'s spelling, no space. */
+const HTML = "text/html;charset=utf-8";
 
-/** A request path as the game and the IRI-shaped name under it, or null. */
-export function route(
-  path: string,
-): { game: string | null; name: string | null } | null {
-  let game: string | null = null;
-  let rest = path.slice(1);
-  const m = /^game\/([A-Za-z0-9-]+)(?:\/(.*))?$/.exec(rest);
-  if (m) [game, rest] = [m[1], m[2] ?? ""];
-  if (rest === "") return { game, name: null };
-  const segments = rest.split("/");
-  if (segments.some((s) => s === "" || s === "." || s === "..")) return null;
-  // The relative path a/b/c is urn:a:b:c; the game's names are iki:tutorial:ttt:….
-  const iri = segments.join(":");
-  const prefix = "iki:tutorial:ttt:";
-  return iri.startsWith(prefix)
-    ? { game, name: iri.slice(prefix.length) }
-    : null;
+// ---------------------------------------------------------------------------
+// The path rule — `ttt-host`'s, which is `ikigai-web`'s
+// ---------------------------------------------------------------------------
+
+/**
+ * A request path, percent-decoded exactly as `ttt-host` decodes it: its edge
+ * (`ikigai-web` 0.1.29, `urldecode`) decodes `%XX` and turns `+` into a space
+ * in the PATH as well as the query. The second is a quirk of the reference,
+ * copied so both faces answer alike: `play/+1/0` is a path with a space in it
+ * there, so it is refused as `not a resource path`, not as a coordinate.
+ */
+export function decodePath(path: string): string {
+  const bytes = new TextEncoder().encode(path);
+  const out: number[] = [];
+  let i = 0;
+  while (i < bytes.length) {
+    const b = bytes[i];
+    // Rust's `u8::from_str_radix` takes a leading `+`, so `%+1` is byte 1 there.
+    const hex = path.slice(i + 1, i + 3);
+    if (b === 0x25 && i + 2 < bytes.length && /^\+?[0-9A-Fa-f]+$/.test(hex)) {
+      out.push(parseInt(hex, 16));
+      i += 3;
+    } else {
+      out.push(b === 0x2b ? 0x20 : b);
+      i += 1;
+    }
+  }
+  return new TextDecoder().decode(new Uint8Array(out));
 }
 
-/** The app: an HTTP handler over one connection to a `ttt-host`. */
+/**
+ * Whether `urn:{rest}` is an IRI (RFC 3987) — what `ttt-host` asks before it
+ * resolves anything, answering `400 not a resource path` when it is not.
+ * `rest` is a decoded path, so a `?` or a `#` in it came from `%3F` / `%23`.
+ */
+export function isIri(rest: string): boolean {
+  const hash = rest.indexOf("#");
+  if (hash >= 0 && rest.indexOf("#", hash + 1) >= 0) return false;
+  return /^(?:[A-Za-z0-9\-._~!$&'()*+,;=:@/?# -퟿豈-﷏ﷰ-￯\u{10000}-\u{EFFFD}]|%[0-9A-Fa-f]{2})*$/u
+    .test(rest);
+}
+
+/** A game's view, as a request names it. */
+export type View = "board" | "status" | "reset" | {
+  x: string;
+  y: string;
+};
+
+/** What a request path is, by `ttt-host`'s rule. */
+export type Route =
+  /** A game's page: `/` (the root game) or `/game/{id}`, trailing slash or not. */
+  | { kind: "page"; game: string | null; iri: string }
+  /** One of the three files the page loads. */
+  | { kind: "static"; path: string }
+  /** A view of a game — the root game when `game` is null. `iri` is the view's edge name. */
+  | { kind: "view"; game: string | null; view: View; iri: string }
+  /** Anything else: not the app's to answer (the app is not a proxy). */
+  | { kind: "other" };
+
+/**
+ * A request path, classified. Empty segments collapse (`ttt-host` joins the
+ * non-empty ones), so `/game/a` and `/game/a/` are one page, and the relative
+ * path `a/b/c` is `urn:a:b:c` — the game is where the page is. A play's `y`
+ * takes the rest of the name, as the host's template does, so `play/1/2/3`
+ * is the play `(1, "2:3")`, refused for its coordinate.
+ */
+export function route(path: string): Route {
+  const segments = decodePath(path).split("/").filter((s) => s !== "");
+  if (segments.length === 0) {
+    return { kind: "page", game: null, iri: "urn:ttt-host:page:root" };
+  }
+  if (segments.length === 2 && segments[0] === "game") {
+    const game = segments[1];
+    return { kind: "page", game, iri: `urn:ttt-host:page:game:${game}` };
+  }
+  const joined = "/" + segments.join("/");
+  if (STATIC[joined] !== undefined) return { kind: "static", path: joined };
+  const rest = segments.join(":");
+  let game: string | null = null;
+  let name = rest;
+  if (rest.startsWith("game:")) {
+    const at = rest.indexOf(":", "game:".length);
+    if (at < 0) return { kind: "other" };
+    [game, name] = [rest.slice("game:".length, at), rest.slice(at + 1)];
+  }
+  const prefix = "iki:tutorial:ttt:view:";
+  if (!name.startsWith(prefix)) return { kind: "other" };
+  const local = name.slice(prefix.length);
+  const play = /^play:([^:]+):(.+)$/.exec(local);
+  const view: View | null = local === "board" || local === "status" ||
+      local === "reset"
+    ? local
+    : play
+    ? { x: play[1], y: play[2] }
+    : null;
+  return view === null
+    ? { kind: "other" }
+    : { kind: "view", game, view, iri: `urn:${rest}` };
+}
+
+// ---------------------------------------------------------------------------
+// The HTTP face
+// ---------------------------------------------------------------------------
+
+/** The kernel verb an HTTP method maps to, as `ttt-host`'s edge maps it. */
+function verbOf(method: string): "source" | "sink" | "delete" | null {
+  switch (method) {
+    case "GET":
+    case "HEAD":
+      return "source";
+    case "PUT":
+    case "POST":
+    case "PATCH":
+      return "sink";
+    case "DELETE":
+      return "delete";
+    default:
+      return null;
+  }
+}
+
+/** The `Allow` list for a resource that declares `verb` (a read when nothing is declared). */
+function allowOf(verb: "source" | "sink" | null): string {
+  return verb === "sink" ? "POST, PUT, PATCH, OPTIONS" : "GET, HEAD, OPTIONS";
+}
+
+/**
+ * The app: an HTTP handler over one connection to a `ttt-host`.
+ *
+ * It answers exactly as `ttt-host` does on every page and view path — the
+ * status and the body — and `404 not found` on every other path, since it
+ * serves no raw resource (`board`, `stored:…`, `template:…`): a view over
+ * resources, not a proxy for them. What the host's edge does, in its order:
+ *
+ * 1. a path that is not an IRI → `400 not a resource path`;
+ * 2. `OPTIONS` → `204` with the `Allow` list; a method with no verb → `405`;
+ * 3. a game the host does not serve declares nothing, so it has no `405`:
+ *    `PATCH` → `415`, anything else → `404 no endpoint resolved for <iri>`;
+ * 4. a verb the resource does not declare → `405 method not allowed`
+ *    (GET/HEAD read; POST/PUT/PATCH write);
+ * 5. `PATCH` → `415` — the edge's only patch format is JSON merge-patch,
+ *    which this app does not model (see the README);
+ * 6. a play's coordinates, each in its plain form → else `400`;
+ * 7. the view, or the write through the host.
+ */
 export function handler(
   client: Host,
   staticDir = new URL("./tictactoe_static/", import.meta.url),
 ): (request: Request) => Promise<Response> {
-  const html = (body: string, headers: Record<string, string> = {}) =>
-    new Response(body, {
-      headers: {
+  return async (request) => {
+    const head = request.method === "HEAD";
+    const respond = (
+      code: number,
+      body: BodyInit | null,
+      headers: Record<string, string>,
+    ) =>
+      new Response(head || code === 204 ? null : body, {
+        status: code,
+        headers,
+      });
+    const text = (code: number, body: string, headers = {}) =>
+      respond(code, body, {
+        "content-type": "text/plain; charset=utf-8",
+        ...headers,
+      });
+    const html = (body: string, headers: Record<string, string> = {}) =>
+      respond(200, body, {
         "content-type": HTML,
         "cache-control": "no-store",
         ...headers,
-      },
-    });
-  const status = (code: number, text: string) =>
-    new Response(text, {
-      status: code,
-      headers: { "content-type": "text/plain; charset=utf-8" },
-    });
+      });
 
-  return async (request) => {
-    const path = new URL(request.url).pathname;
-    const file = STATIC[path];
-    if (file !== undefined) {
-      if (request.method !== "GET") return status(405, "method not allowed");
-      const body = await Deno.readFile(new URL(file.file, staticDir));
-      return new Response(body, { headers: { "content-type": file.type } });
+    const at = route(new URL(request.url).pathname);
+    if (at.kind === "other") return text(404, "not found");
+    if (at.kind !== "static" && !isIri(at.iri.slice("urn:".length))) {
+      return text(400, "not a resource path");
     }
-    const at = route(path);
-    if (at === null) return status(404, "not found");
-    const game = new Game(client, at.game);
-    const want = (method: string) => request.method === method;
+    const writes = at.kind === "view" &&
+      (at.view === "reset" || typeof at.view === "object");
+    const declared = writes ? "sink" : "source";
+    const allow = { allow: allowOf(declared) };
+    if (request.method === "OPTIONS") return respond(204, null, allow);
+    const verb = verbOf(request.method);
+    if (verb === null) return text(405, "method not allowed", allow);
+
     try {
-      if (at.name === null) {
-        if (!want("GET")) return status(405, "method not allowed");
-        const others = await games(client);
-        return html(await page(game, others), {
+      // The host's games, read from its catalog on every request: nothing here caches.
+      const served = at.kind === "static" ? [] : await games(client);
+      if (at.kind !== "static" && at.game !== null) {
+        if (!served.includes(at.game)) {
+          if (request.method === "PATCH") {
+            return text(415, "no patch strategy for this Content-Type");
+          }
+          return text(404, rustDisplay(new UnresolvedError(at.iri)));
+        }
+      }
+      if (verb !== declared) return text(405, "method not allowed", allow);
+      if (request.method === "PATCH") {
+        return text(415, "no patch strategy for this Content-Type");
+      }
+
+      if (at.kind === "static") {
+        const file = STATIC[at.path];
+        const body = await Deno.readFile(new URL(file.file, staticDir));
+        return respond(200, body, { "content-type": file.type });
+      }
+      const game = new Game(client, at.game);
+      if (at.kind === "page") {
+        return html(await page(game, served), {
           "content-security-policy": PAGE_CSP,
         });
       }
-      if (at.name === "view:board" || at.name === "view:status") {
-        if (!want("GET")) return status(405, "a view is read: GET it");
-        return html(
-          at.name === "view:board"
-            ? await viewBoard(game)
-            : await viewStatus(game),
-        );
-      }
-      if (at.name === "view:reset") {
-        if (!want("POST")) {
-          return status(405, "a reset is made, not read: POST it");
-        }
-        return html(await reply(game, "reset"));
-      }
-      const play = /^view:play:([^:]+):([^:]+)$/.exec(at.name);
-      if (play) {
-        if (!want("POST")) {
-          return status(405, "a play is made, not read: POST it");
-        }
-        const [x, y] = [plainInteger("x", play[1]), plainInteger("y", play[2])];
-        return html(await reply(game, `move:${x}:${y}`));
-      }
-      return status(404, "not found");
+      const view = at.view;
+      if (view === "board") return html(await viewBoard(game));
+      if (view === "status") return html(await viewStatus(game));
+      if (view === "reset") return html(await reply(game, "reset"));
+      const [x, y] = [plainInteger("x", view.x), plainInteger("y", view.y)];
+      return html(await reply(game, `move:${x}:${y}`));
     } catch (e) {
-      if (e instanceof ConnectionLost) return status(503, `${e.message}`);
+      if (e instanceof ConnectionLost) return text(503, `${e.message}`);
       if (!(e instanceof EndpointError)) throw e;
       // The game is in the path, so a game the host does not serve is the caller's 404.
       const code = e instanceof UnresolvedError ? 404 : httpStatus(e);
-      return status(code, rustDisplay(e));
+      return text(code, rustDisplay(e));
     }
   };
 }
 
+// ---------------------------------------------------------------------------
+// The command line — `ttt-host`'s spelling
+// ---------------------------------------------------------------------------
+
+/** The address the app listens on when `--http` is not given (ttt-host 8070, Deno 8071, Python 8072). */
+export const DEFAULT_HTTP = "127.0.0.1:8071";
+
+/** The usage text. */
+export const USAGE =
+  `usage: deno run -A examples/tictactoe_app.ts [--socket <path>] [--http <addr>]
+  --socket <path>   the ttt-host IPC socket (default: ttt-host.sock in the temp dir)
+  --http <addr>     serve the pages over HTTP (default ${DEFAULT_HTTP})`;
+
+/** What the app connects to and where it listens. */
+export type Options = {
+  socket: string;
+  http: { hostname: string; port: number };
+};
+
+/** `host:port` (or `[v6]:port`) as a listen address; the error names the flag. */
+export function parseAddr(text: string): { hostname: string; port: number } {
+  const m = /^(?:\[([^\]]+)\]|([^:\[\]]+)):([0-9]+)$/.exec(text);
+  const port = m ? Number(m[3]) : NaN;
+  if (!m || !(port <= 65535)) {
+    throw new Error(
+      `--http ${text}: not an address (host:port, e.g. ${DEFAULT_HTTP})`,
+    );
+  }
+  return { hostname: m[1] ?? m[2], port };
+}
+
+/**
+ * The command line (without the program name). `--port` and `--host` were
+ * this app's flags before it took `ttt-host`'s spelling; they are refused by
+ * name, pointing at `--http`, rather than silently ignored.
+ */
+export function parseArgs(args: string[], tmpdir = "/tmp"): Options {
+  let socket = `${tmpdir.replace(/\/$/, "")}/ttt-host.sock`;
+  let http = parseAddr(DEFAULT_HTTP);
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i];
+    const value = () => {
+      if (i + 1 >= args.length) {
+        throw new Error(`${flag} needs a value\n${USAGE}`);
+      }
+      return args[++i];
+    };
+    switch (flag) {
+      case "--socket":
+        socket = value();
+        break;
+      case "--http":
+        http = parseAddr(value());
+        break;
+      case "--port":
+      case "--host":
+        throw new Error(
+          `${flag} is not a flag any more: the listen address is --http <addr> ` +
+            `(e.g. --http ${DEFAULT_HTTP}), as ttt-host spells it`,
+        );
+      case "--help":
+      case "-h":
+        throw new Error(USAGE);
+      default:
+        throw new Error(`unknown argument \`${flag}\`\n${USAGE}`);
+    }
+  }
+  return { socket, http };
+}
+
 if (import.meta.main) {
-  const flag = (name: string, fallback: string) => {
-    const at = Deno.args.indexOf(name);
-    return at >= 0 && at + 1 < Deno.args.length ? Deno.args[at + 1] : fallback;
-  };
-  const tmp = (Deno.env.get("TMPDIR") ?? "/tmp").replace(/\/$/, "");
-  const socket = flag("--socket", `${tmp}/ttt-host.sock`);
-  const port = Number(flag("--port", "8071"));
-  const hostname = flag("--host", "127.0.0.1");
+  let options: Options;
+  try {
+    options = parseArgs(Deno.args, Deno.env.get("TMPDIR") ?? "/tmp");
+  } catch (e) {
+    console.error(`examples/tictactoe_app.ts: ${(e as Error).message}`);
+    Deno.exit(1);
+  }
+  const { socket, http } = options;
   const client = await connect(socket);
   const known = await games(client);
   Deno.serve({
-    port,
-    hostname,
+    ...http,
     onListen: ({ hostname, port }) => {
       console.error(
         `examples/tictactoe_app.ts: http://${hostname}:${port}/ (the root game); ` +

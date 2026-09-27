@@ -387,6 +387,20 @@ over IPC, and the page and its three static files equal `ttt-host`'s. (It skips
 when no `ttt-host` is found: `$TTT_HOST`, `~/.local/ttt-host/bin/ttt-host`, then
 `PATH`.)
 
+The app also answers every page and view path the way `ttt-host` does, refusals
+included: the same status and the same body for a coordinate not in its plain
+form (`400`), a game the host does not serve (`404`), a method a view does not
+take (`405`, with the host's `Allow` list), `/game/a` with or without its
+trailing slash, and a path that is not an IRI (`400 not a resource path`). The
+parity test asks both faces some sixty such requests and compares the answers.
+Two deliberate differences: a path that is not a view (`board`, `stored:…`,
+`template:…`) is `404 not found`, because the app serves views and is not a
+proxy for the host's raw resources; and a `PATCH` is always `415`, which the
+host also answers unless the body is a JSON merge-patch, a format the app does
+not model. The flags are the host's spelling, `--socket <path>` and
+`--http <addr>` (default `127.0.0.1:8071`; the host takes 8070 and the Python
+face 8072, so all three run at once).
+
 Two honest limits. **Always write through the host**: the host cuts its cached
 reads when ITS kernel issues the write, so a mark written to the store directly
 (another client of the Deno store) leaves the host serving the old board until

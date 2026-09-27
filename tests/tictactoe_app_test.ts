@@ -21,11 +21,15 @@ import {
   UnresolvedError,
 } from "../src/wire.ts";
 import {
+  decodePath,
   escapeHtml,
   fill,
   handler,
   type Host,
+  isIri,
   PAGE_CSP,
+  parseArgs,
+  type Route,
   route,
   rustDisplay,
 } from "../examples/tictactoe_app.ts";
@@ -47,9 +51,9 @@ Deno.test("ttt app: the vendored htmx, ttt.css and host.css are the book's", asy
     "htmx-2.0.4.min.js":
       "e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447",
     "ttt.css":
-      "4955aadc02365f9eb9e5a71038a9dbb541647ee626eaad8db45ffd32fa845a53",
+      "f93bde4b6dacb82b085d88c8cf33c899eb3dd435dd64acd5e1e19c63be04f09b",
     "host.css":
-      "4427125dde3c767472ceeb387e7bebf7459130ae6b9044ac00e1611a0c30fead",
+      "79437443cd22e56d183ebf5b4a6de625e72354d38e8a39e54894bf0dc19f27ac",
   };
   for (const [file, digest] of Object.entries(expected)) {
     const bytes = await Deno.readFile(new URL(file, STATIC_DIR));
@@ -70,6 +74,14 @@ Deno.test("ttt app: text is escaped, HTML is not", () => {
   assertStrictEquals(
     out,
     `<b title="&lt;&quot;x&quot;&gt;">&lt;&quot;x&quot;&gt;</b><i>raw</i>`,
+  );
+});
+
+Deno.test("ttt app: an apostrophe is &#39;, the Rust filler's escape", () => {
+  assertStrictEquals(escapeHtml("'"), "&#39;");
+  assertStrictEquals(
+    fill(`<b title='{{t}}'>{{t}}</b>`, () => ({ text: "it's" })),
+    "<b title='it&#39;s'>it&#39;s</b>",
   );
 });
 
@@ -125,33 +137,115 @@ Deno.test("ttt app: a refusal reads as the Rust kernel's Display prints it", () 
 });
 
 // ---------------------------------------------------------------------------
-// The path <-> IRI rule
+// The path <-> IRI rule (ttt-host's)
 // ---------------------------------------------------------------------------
 
 Deno.test("ttt app: the game is where the page is; a/b/c is urn:a:b:c", () => {
-  assertEquals(route("/"), { game: null, name: null });
-  assertEquals(route("/game/a/"), { game: "a", name: null });
-  assertEquals(route("/game/a"), { game: "a", name: null });
-  assertEquals(route("/iki/tutorial/ttt/view/board"), {
+  const root: Route = {
+    kind: "page",
     game: null,
-    name: "view:board",
+    iri: "urn:ttt-host:page:root",
+  };
+  const a: Route = { kind: "page", game: "a", iri: "urn:ttt-host:page:game:a" };
+  assertEquals(route("/"), root);
+  assertEquals(route("//"), root);
+  assertEquals(route("/game/a/"), a);
+  assertEquals(route("/game/a"), a);
+  assertEquals(route("/game/a//"), a);
+  assertEquals(route("/iki/tutorial/ttt/view/board"), {
+    kind: "view",
+    game: null,
+    view: "board",
+    iri: "urn:iki:tutorial:ttt:view:board",
   });
-  assertEquals(route("/game/ts/iki/tutorial/ttt/view/play/1/2"), {
+  assertEquals(route("/game/ts/iki/tutorial/ttt//view/play/1/2/"), {
+    kind: "view",
     game: "ts",
-    name: "view:play:1:2",
+    view: { x: "1", y: "2" },
+    iri: "urn:game:ts:iki:tutorial:ttt:view:play:1:2",
+  });
+  // y takes the rest of the name, as the host's template does.
+  assertEquals(route("/game/a/iki/tutorial/ttt/view/play/1/2/3"), {
+    kind: "view",
+    game: "a",
+    view: { x: "1", y: "2:3" },
+    iri: "urn:game:a:iki:tutorial:ttt:view:play:1:2:3",
+  });
+  assertEquals(route("/static//ttt.css"), {
+    kind: "static",
+    path: "/static/ttt.css",
   });
   for (
-    const refused of [
-      "/game/a/iki/tutorial/ttt//view",
-      "/game/a/iki/tutorial/ttt/./view",
-      "/game/a/iki/tutorial/ttt/../view",
+    const other of [
+      "/game",
+      "/game/",
+      "/game/a/iki/tutorial/ttt/board",
+      "/game/a/iki/tutorial/ttt/view",
+      "/game/a/iki/tutorial/ttt/view/nothing",
+      "/game/a/iki/tutorial/ttt/view/play/1",
+      "/game/a/iki/tutorial/ttt/stored/1/1",
+      "/iki/tutorial/ttt/template/board",
       "/game/a/other/thing",
-      "/game/a b/",
+      "/static/nothing.css",
       "/favicon.ico",
     ]
   ) {
-    assertStrictEquals(route(refused), null, refused);
+    assertEquals(route(other), { kind: "other" }, other);
   }
+});
+
+Deno.test("ttt app: a path is decoded as ttt-host's edge decodes it", () => {
+  assertStrictEquals(decodePath("/game/a%41/"), "/game/aA/");
+  assertStrictEquals(decodePath("/a%20b"), "/a b");
+  assertStrictEquals(decodePath("/game/a%41"), "/game/aA");
+  assertStrictEquals(decodePath("/%zz/"), "/%zz/");
+  assertStrictEquals(decodePath("/game/a%4"), "/game/a%4");
+  // The reference's quirks, copied: `+` is a space in a path too, and Rust's
+  // hex parse takes a leading `+`, so `%+1` is byte 1.
+  assertStrictEquals(decodePath("/play/+1/0"), "/play/ 1/0");
+  assertStrictEquals(decodePath("/a%+1"), "/a\u0001");
+});
+
+Deno.test("ttt app: a path that is not an IRI is refused before anything resolves", () => {
+  for (const ok of ["game:a:iki:tutorial:ttt:view:board", "a_b", "caf\u00e9"]) {
+    assert(isIri(ok), ok);
+  }
+  for (const bad of ["a b", "a<b", "a%zz", "a{b}", "a#b#c", "a\u0085b"]) {
+    assert(!isIri(bad), bad);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// The command line: ttt-host's spelling
+// ---------------------------------------------------------------------------
+
+Deno.test("ttt app: --socket and --http, as ttt-host spells them", () => {
+  assertEquals(parseArgs([], "/tmp/"), {
+    socket: "/tmp/ttt-host.sock",
+    http: { hostname: "127.0.0.1", port: 8071 },
+  });
+  assertEquals(
+    parseArgs(["--http", "[::1]:9000", "--socket", "/tmp/s.sock"]),
+    { socket: "/tmp/s.sock", http: { hostname: "::1", port: 9000 } },
+  );
+  const refusal = (args: string[]) => {
+    try {
+      parseArgs(args);
+    } catch (e) {
+      return (e as Error).message;
+    }
+    throw new Error(`${args.join(" ")} was accepted`);
+  };
+  // The old flags are refused by name, pointing at the new one.
+  for (const old of ["--port", "--host"]) {
+    const message = refusal([old, "8071"]);
+    assert(message.startsWith(`${old} is not a flag any more`), message);
+    assert(message.includes("--http <addr>"), message);
+  }
+  assert(refusal(["--http", "8071"]).startsWith("--http 8071: not an address"));
+  assert(refusal(["--http", "h:70000"]).startsWith("--http h:70000"));
+  assert(refusal(["--socket"]).startsWith("--socket needs a value"));
+  assert(refusal(["--listen", "x"]).startsWith("unknown argument `--listen`"));
 });
 
 // ---------------------------------------------------------------------------
@@ -265,35 +359,163 @@ Deno.test("ttt app: a play is a Sink through the host, a refusal is answered", a
 
 Deno.test("ttt app: wrong verbs, bad coordinates and unknown games are refused", async () => {
   const host = standIn();
-  const status = async (method: string, path: string) =>
-    (await call(host, method, path))[0];
-  assertStrictEquals(
-    await status("GET", "/game/a/iki/tutorial/ttt/view/play/1/0"),
-    405,
-  );
-  assertStrictEquals(
-    await status("POST", "/game/a/iki/tutorial/ttt/view/board"),
-    405,
-  );
-  assertStrictEquals(
-    await status("POST", "/game/a/iki/tutorial/ttt/view/play/01/0"),
-    400,
-  );
-  assertStrictEquals(
-    await status("GET", "/game/zz/iki/tutorial/ttt/view/board"),
-    404,
-  );
-  assertStrictEquals(
-    await status("GET", "/game/a/iki/tutorial/ttt/board"),
-    404,
-  );
-  assertStrictEquals(await status("GET", "/nothing"), 404);
+  const view = "iki/tutorial/ttt/view";
+  const cases: [string, string, number, string][] = [
+    ["GET", `/game/a/${view}/play/1/0`, 405, "method not allowed"],
+    ["HEAD", `/game/a/${view}/play/1/0`, 405, ""],
+    ["DELETE", `/game/a/${view}/reset`, 405, "method not allowed"],
+    ["POST", `/game/a/${view}/board`, 405, "method not allowed"],
+    ["POST", "/game/a/", 405, "method not allowed"],
+    ["FOO", `/game/a/${view}/board`, 405, "method not allowed"],
+    ["OPTIONS", `/game/a/${view}/board`, 204, ""],
+    [
+      "PATCH",
+      `/game/a/${view}/reset`,
+      415,
+      "no patch strategy for this Content-Type",
+    ],
+    [
+      "POST",
+      `/game/a/${view}/play/01/0`,
+      400,
+      "invalid argument `x`: `01` is not an integer in its plain form (e.g. 0, 2, -1)",
+    ],
+    ["POST", `/game/a/${view}/play/+1/0`, 400, "not a resource path"],
+    [
+      "GET",
+      `/game/zz/${view}/board`,
+      404,
+      "no endpoint resolved for urn:game:zz:iki:tutorial:ttt:view:board",
+    ],
+    // An unknown game declares nothing, so it has no 405 and no coordinate check.
+    [
+      "GET",
+      `/game/zz/${view}/play/01/0`,
+      404,
+      "no endpoint resolved for urn:game:zz:iki:tutorial:ttt:view:play:01:0",
+    ],
+    [
+      "GET",
+      "/game/zz",
+      404,
+      "no endpoint resolved for urn:ttt-host:page:game:zz",
+    ],
+    ["GET", "/game/a b/", 400, "not a resource path"],
+    ["GET", "/game/a/iki/tutorial/ttt/board", 404, "not found"],
+    ["GET", "/game/a/stored/1/1", 404, "not found"],
+    ["GET", "/nothing", 404, "not found"],
+  ];
+  for (const [method, path, code, body] of cases) {
+    assertEquals(
+      (await call(host, method, path)).slice(0, 2),
+      [code, body],
+      `${method} ${path}`,
+    );
+  }
+  const [, , headers] = await call(host, "GET", `/game/a/${view}/play/1/0`);
+  assertStrictEquals(headers.get("allow"), "POST, PUT, PATCH, OPTIONS");
+  const [, , options] = await call(host, "OPTIONS", "/game/a/");
+  assertStrictEquals(options.get("allow"), "GET, HEAD, OPTIONS");
   assertEquals(host.writes, []);
 });
 
 // ---------------------------------------------------------------------------
 // The parity test: TypeScript's fill against Rust's, on a real ttt-host
 // ---------------------------------------------------------------------------
+
+const VIEWS = "iki/tutorial/ttt/view";
+
+/**
+ * The edge cases the parity test asks both faces, measured on `ttt-host`
+ * (tutorial `31daf4e`). None of them moves a game: they run once game `a` is
+ * over, so a play is refused, and no reset is among them.
+ */
+const EDGES: [string, string][] = [
+  // The page, with and without the trailing slash; an unknown game; a path
+  // that is not an IRI; every method.
+  ["GET", "/game/a"],
+  ["GET", "/game/a//"],
+  ["GET", "/game/zz"],
+  ["GET", "/game/zz/"],
+  ["GET", "/game/a_b/"],
+  ["GET", "/game/a%41/"],
+  ["GET", "/game/a%20b/"],
+  ["GET", "/game/a%4"],
+  ["HEAD", "/game/a/"],
+  ["HEAD", "/game/zz/"],
+  ["POST", "/"],
+  ["POST", "/game/a/"],
+  ["POST", "/game/zz/"],
+  ["PUT", "/game/a/"],
+  ["DELETE", "/game/a"],
+  ["PATCH", "/game/a/"],
+  ["PATCH", "/game/zz/"],
+  ["OPTIONS", "/"],
+  ["OPTIONS", "/game/a/"],
+  ["OPTIONS", "/game/zz/"],
+  ["FOO", "/game/a/"],
+  // A play: a coordinate not in its plain form, and each method.
+  ["POST", `/game/a/${VIEWS}/play/01/0`],
+  ["POST", `/game/a/${VIEWS}/play/-0/0`],
+  ["POST", `/game/a/${VIEWS}/play/+1/0`],
+  ["POST", `/game/a/${VIEWS}/play/x/0`],
+  ["POST", `/game/a/${VIEWS}/play/1.0/0`],
+  ["POST", `/game/a/${VIEWS}/play/0/01`],
+  ["POST", `/game/a/${VIEWS}/play/99999999999999999999/0`],
+  ["POST", `/game/a/${VIEWS}/play/1/2/3`],
+  ["POST", `/game/a/${VIEWS}/play/a%20b/0`],
+  ["POST", `/game/a/${VIEWS}/play/3/1`],
+  ["PUT", `/game/a/${VIEWS}/play/1/1`],
+  ["POST", `/game/a/${VIEWS}/play/1/1/`],
+  ["GET", `/game/a/${VIEWS}/play/1/1`],
+  ["HEAD", `/game/a/${VIEWS}/play/1/1`],
+  ["DELETE", `/game/a/${VIEWS}/play/1/1`],
+  ["PATCH", `/game/a/${VIEWS}/play/1/1`],
+  ["OPTIONS", `/game/a/${VIEWS}/play/1/1`],
+  ["GET", `/game/a/${VIEWS}/reset`],
+  ["DELETE", `/game/a/${VIEWS}/reset`],
+  ["PATCH", `/game/a/${VIEWS}/reset`],
+  ["POST", `/${VIEWS}/play/01/0`],
+  // A read view: each method, and the path's spellings.
+  ["POST", `/game/a/${VIEWS}/board`],
+  ["PUT", `/game/a/${VIEWS}/board`],
+  ["DELETE", `/game/a/${VIEWS}/status`],
+  ["PATCH", `/game/a/${VIEWS}/status`],
+  ["HEAD", `/game/a/${VIEWS}/board`],
+  ["OPTIONS", `/game/a/${VIEWS}/board`],
+  ["FOO", `/game/a/${VIEWS}/board`],
+  ["GET", `/game/a/${VIEWS}/board/`],
+  ["GET", `/game/a/iki/tutorial/ttt//view//status`],
+  ["GET", `/${VIEWS}/status`],
+  // A game the host does not serve: no 405 and no coordinate check, a 404.
+  ["GET", `/game/zz/${VIEWS}/board`],
+  ["GET", `/game/zz/${VIEWS}/play/1/1`],
+  ["POST", `/game/zz/${VIEWS}/play/1/1`],
+  ["POST", `/game/zz/${VIEWS}/play/01/0`],
+  ["POST", `/game/zz/${VIEWS}/reset`],
+  ["PATCH", `/game/zz/${VIEWS}/reset`],
+  ["OPTIONS", `/game/zz/${VIEWS}/board`],
+  ["FOO", `/game/zz/${VIEWS}/board`],
+  // The files the page loads.
+  ["GET", "/static//ttt.css"],
+  ["HEAD", "/static/host.css"],
+  ["POST", "/static/ttt.css"],
+];
+
+/** Paths the host serves that are not views: the app answers `404 not found`. */
+const NOT_VIEWS = [
+  "/game/a/iki/tutorial/ttt/board",
+  "/game/a/iki/tutorial/ttt/cell/1/1",
+  "/game/a/iki/tutorial/ttt/winner",
+  "/game/a/iki/tutorial/ttt/template/board",
+  "/iki/tutorial/ttt/turn",
+  "/iki/tutorial/ttt/stored/1/1",
+  "/game/a/iki/tutorial/ttt/view/nothing",
+  "/game/a/iki/tutorial/ttt/view/play/1",
+  "/static/nothing.css",
+  "/favicon.ico",
+  "/game",
+];
 
 /** The `ttt-host` binary, or null. */
 function findTttHost(): string | null {
@@ -467,6 +689,29 @@ Deno.test({
         1,
         "invalid argument `x, y`: the game is over — a draw. A draw.",
       );
+      // The edges, with game a over (so every play is refused and nothing
+      // moves): the app answers what the host answers, status and body.
+      const answer = async (base: string, method: string, path: string) => {
+        const response = await fetch(`${base}${path}`, { method });
+        return {
+          status: response.status,
+          body: await response.text(),
+          type: response.headers.get("content-type"),
+          allow: response.headers.get("allow"),
+        };
+      };
+      for (const [method, path] of EDGES) {
+        assertEquals(
+          await answer(appUrl, method, path),
+          await answer(hostHttp, method, path),
+          `${method} ${path}`,
+        );
+      }
+      // Not views: the host serves them, the app does not proxy them.
+      for (const path of NOT_VIEWS) {
+        const ours = await answer(appUrl, "GET", path);
+        assertEquals([ours.status, ours.body], [404, "not found"], path);
+      }
       // The root game (no game in the path) fills the same way.
       assertStrictEquals(
         await get(appUrl, `/${views}/board`),
