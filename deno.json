@@ -18,8 +18,11 @@
     "preact": "npm:preact@^10.27",
     "preact-render-to-string": "npm:preact-render-to-string@^6.6"
   },
+  "exclude": [
+    "examples/tictactoe_static/"
+  ],
   "tasks": {
-    "check": "deno fmt --check && deno lint && deno check src/mod.ts src/zod.ts examples/demo.ts examples/endpoints.ts examples/hono_app.ts examples/oak_app.ts examples/fresh_app.ts examples/tictactoe_store.ts && deno test -A",
+    "check": "deno fmt --check && deno lint && deno check src/mod.ts src/zod.ts examples/demo.ts examples/endpoints.ts examples/hono_app.ts examples/oak_app.ts examples/fresh_app.ts examples/tictactoe_store.ts examples/tictactoe_app.ts && deno test -A",
     "test": "deno test -A"
   }
 }

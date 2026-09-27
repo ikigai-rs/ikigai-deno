@@ -348,6 +348,55 @@ and counts the reads that reached Deno.
 - Missing required arguments cross as a typed `MissingArgument`, rendering the
   exact error text the Rust kernel uses, so the host-side experience is native.
 
+## Tic-tac-toe, all in TypeScript except the middle
+
+The ikigai book's tic-tac-toe (ikigai-tutorial, `crates/tic-tac-toe`) ships its
+HTML as **template resources** — `template:board`, `template:square-open`, … —
+with `{{slot}}` holes and no loops or conditions, so that any language can fill
+them. Two examples here put TypeScript on both ends of the game, with the Rust
+kernel in the middle:
+
+- [`examples/tictactoe_store.ts`](examples/tictactoe_store.ts) — the game's
+  STATE: the stored cell, served from Deno (above).
+- [`examples/tictactoe_app.ts`](examples/tictactoe_app.ts) — the game's
+  RENDERING: a zero-dependency `Deno.serve` app that connects to `ttt-host` as
+  an IPC client and serves the playable board. It reads `template:*`,
+  `cell:{x}:{y}`, `winner` and `turn` from the host and fills the templates
+  itself — about a hundred lines, half of them refusing the malformed slots the
+  Rust filler refuses — and every play is a Sink through the host
+  (`move:{x}:{y}`, `reset`).
+
+`ttt-host` (built from ikigai-tutorial's `crates/ttt-host`) holds the rules, the
+composites and the cache, and mounts the Deno store as game `ts`:
+
+```sh
+deno run -A examples/tictactoe_store.ts /tmp/ttt-store.sock
+ttt-host --socket /tmp/ttt-host.sock --game a --game ts=/tmp/ttt-store.sock
+deno run -A examples/tictactoe_app.ts --socket /tmp/ttt-host.sock   # :8071
+# open http://127.0.0.1:8071/game/ts/
+```
+
+Game state in TypeScript, rendering in TypeScript, and the Rust kernel in the
+middle doing resolution, composition, caching and invalidation: a move cuts one
+stored cell, and only what reads through it recomputes. `ttt-host` serves the
+same game on its own HTTP face (`:8070`), filled by its Rust views, and the two
+pages are the same bytes. `tests/tictactoe_app_test.ts` proves that: for an
+empty board, a won game, a drawn game and four refusals on the way, the app's
+`view/board`, `view/status` and every play's reply equal the Rust views' bytes
+over IPC, and the page and its three static files equal `ttt-host`'s. (It skips
+when no `ttt-host` is found: `$TTT_HOST`, `~/.local/ttt-host/bin/ttt-host`, then
+`PATH`.)
+
+Two honest limits. **Always write through the host**: the host cuts its cached
+reads when ITS kernel issues the write, so a mark written to the store directly
+(another client of the Deno store) leaves the host serving the old board until
+something else cuts it — there is no golden thread over the wire. And **the app
+renders from raw resources but never computes the game**: a TypeScript composite
+that called back into the host for its inputs (a winner computed in Deno from
+cells it sourced) would be a traccessor — its answer would depend on reads the
+host never saw it make, so nothing could ever cut it. The rules stay resources
+in the kernel; the app only fills templates with their answers.
+
 ## Security posture
 
 The socket is `0600` in a `0700` directory, and the kernel enforces that mode on

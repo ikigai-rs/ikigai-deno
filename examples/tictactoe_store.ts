@@ -3,7 +3,7 @@
  *
  * The ikigai book's applied chapter (ikigai-tutorial,
  * `crates/tic-tac-toe`, `books/ikigai/src/applied/tic-tac-toe-*.md`) builds
- * noughts and crosses as resources. Everything above the atom — the
+ * tic-tac-toe as resources. Everything above the atom — the
  * platonic cell, lines, the board, the rules — stays in a Rust kernel; this
  * file is the one piece of state, and a host mounts it:
  *
@@ -13,7 +13,7 @@
  *   -c 'sink urn:iki:tutorial:ttt:stored:1:1 X'
  * ```
  *
- * The contract, honoured message for message against the Rust original
+ * The contract, honored message for message against the Rust original
  * (`stored_cell`, `CellStore`, `coordinate`/`plain_integer` in
  * `crates/tic-tac-toe/src/lib.rs`):
  *
