@@ -2,7 +2,7 @@
  * The ikigai IPC wire protocol: types, postcard codec, framing, the hello,
  * and the typed error taxonomy.
  *
- * Mirrors `ikigai-wire` (Rust) at `PROTOCOL_VERSION` 7. The codec is
+ * Mirrors `ikigai-wire` (Rust) at `PROTOCOL_VERSION` 8. The codec is
  * non-self-describing, so every type here restates a Rust layout
  * field-for-field; the Rust declaration is the normative source
  * (`ikigai-wire/src/lib.rs` and the `ikigai-core` types it serializes), and
@@ -27,6 +27,18 @@
  * {@linkcode WireFailure}), so a remote denial stays a permanent denial and a
  * remote timeout stays transient, instead of every failure flattening to one
  * string.
+ *
+ * **v8 is the first BACKWARD-COMPATIBLE bump.** It appends one taxonomy
+ * variant — `Conflict`, variant 8 (see {@linkcode ConflictError}) — and
+ * nothing else, so a flag day would have bought nothing but an outage. A v8
+ * peer accepts a hello of {@linkcode MIN_PROTOCOL_VERSION} (7) or 8 and
+ * answers with the NEGOTIATED version, the lower of the two; each connection
+ * remembers it, and a v8 server never sends variant 8 to a v7 peer — it
+ * downgrades `Conflict(msg)` to `Endpoint("conflict: {msg}")`, byte-identical
+ * to what a v7 server sends for the same core error (see
+ * {@linkcode replyForPeer}). A v7 SERVER answers a v8 hello with 7 and hangs
+ * up (unequal versions close, under v7's rules), so a v8 client that hears 7
+ * redials once, saying 7.
  */
 
 import { DecodeError, Reader, Writer } from "./postcard.ts";
@@ -36,9 +48,42 @@ import { DecodeError, Reader, Writer } from "./postcard.ts";
  * core 0.1.48 `TraceEvent.notes` changed the postcard layout of traced
  * replies. v6 adds the hello exchange (version + mount mode at open). v7 adds
  * `Reply::ErrorTyped` (the error taxonomy crosses, not a flat string) and
- * removes the v6 tolerances: the hello is required on both sides.
+ * removes the v6 tolerances: the hello is required on both sides. v8 appends
+ * `WireError::Conflict` (variant 8) and is backward compatible with v7 — see
+ * {@linkcode MIN_PROTOCOL_VERSION}.
  */
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
+
+/**
+ * The oldest peer version this side still speaks. A hello below it is
+ * refused (answered with {@linkcode PROTOCOL_VERSION}, so the peer can name
+ * both versions, then closed); a hello from here up to
+ * {@linkcode PROTOCOL_VERSION} is served at the lower of the two versions.
+ */
+export const MIN_PROTOCOL_VERSION = 7;
+
+/**
+ * The version a connection runs at, given the peer's hello: the lower of the
+ * two sides, or `null` when the peer is older than
+ * {@linkcode MIN_PROTOCOL_VERSION} and must be refused. A peer NEWER than
+ * this side is answered with {@linkcode PROTOCOL_VERSION}; whether that is
+ * acceptable is the newer side's decision, the same one this side makes
+ * about a v7 peer.
+ *
+ * ```ts
+ * import { negotiateVersion } from "./wire.ts";
+ * negotiateVersion(8); // 8
+ * negotiateVersion(7); // 7 — a v7 peer is served at v7
+ * negotiateVersion(6); // null — refused
+ * ```
+ */
+export function negotiateVersion(peerVersion: number): number | null {
+  if (peerVersion < MIN_PROTOCOL_VERSION) return null;
+  return Math.min(peerVersion, PROTOCOL_VERSION);
+}
+
+/** The first wire version that carries `WireError::Conflict` (variant 8). */
+export const CONFLICT_SINCE_VERSION = 8;
 
 /**
  * The magic prefix of a hello payload; a first frame without it is a legacy
@@ -78,8 +123,9 @@ export class ProtocolError extends WireError {}
  *
  * `transient` mirrors `ikigai_core::Error::is_transient()`: `true` only for
  * {@linkcode TimeoutError} and {@linkcode UnavailableError} — re-issuing
- * might succeed. Permanent failures (denied, not found, bad arguments) stay
- * `false`: retrying will not conjure the resource or the grant.
+ * might succeed. Permanent failures (denied, not found, bad arguments, a
+ * state conflict) stay `false`: retrying will not conjure the resource or
+ * the grant, nor change the state that refused.
  */
 export class EndpointError extends WireError {
   readonly transient: boolean = false;
@@ -134,6 +180,21 @@ export class DeniedError extends EndpointError {}
  * **permanent**; an HTTP face says 404.
  */
 export class NotFoundError extends EndpointError {}
+
+/**
+ * The request is well-formed and authorized and its target exists, but the
+ * target's CURRENT STATE refuses it (`Error::Conflict`, core 0.1.80; wire
+ * variant 8 since v8) — a move on an occupied square, a write that lost a
+ * race. **Permanent**: re-issuing the same request against the same state
+ * fails the same way, so a retry overlay must not retry it. An HTTP face
+ * says 409. (A precondition the CALLER stated — `If-Match` — failing is 412,
+ * not this.)
+ *
+ * The message is carried verbatim, like {@linkcode DeniedError}'s: the class
+ * is the taxonomy. Only the downgrade to a v7 peer bakes a `conflict: `
+ * prefix into text, because there the text is all that survives.
+ */
+export class ConflictError extends EndpointError {}
 
 /**
  * The remote operation exceeded its time budget (`Error::Timeout`) —
@@ -430,7 +491,7 @@ export type Call =
  * taxonomy addition is a WIRE VERSION event, not a silent core cascade.
  * Variant order is the postcard contract — append only:
  * unresolved=0, missingArgument=1, invalidArgument=2, endpoint=3, denied=4,
- * notFound=5, timeout=6, unavailable=7.
+ * notFound=5, timeout=6, unavailable=7, conflict=8 (v8).
  */
 export type WireFailure =
   | { readonly kind: "unresolved"; readonly iri: string }
@@ -444,7 +505,8 @@ export type WireFailure =
   | { readonly kind: "denied"; readonly message: string }
   | { readonly kind: "notFound"; readonly message: string }
   | { readonly kind: "timeout"; readonly message: string }
-  | { readonly kind: "unavailable"; readonly message: string };
+  | { readonly kind: "unavailable"; readonly message: string }
+  | { readonly kind: "conflict"; readonly message: string };
 
 /**
  * Rebuild the typed error a {@linkcode WireFailure} carries — the client's
@@ -470,6 +532,8 @@ export function typedError(failure: WireFailure): EndpointError {
       return new TimeoutError(failure.message);
     case "unavailable":
       return new UnavailableError(failure.message);
+    case "conflict":
+      return new ConflictError(failure.message);
   }
 }
 
@@ -506,8 +570,46 @@ export function toWireFailure(error: unknown): WireFailure {
   if (error instanceof UnavailableError) {
     return { kind: "unavailable", message: error.message };
   }
+  if (error instanceof ConflictError) {
+    return { kind: "conflict", message: error.message };
+  }
   const message = error instanceof Error ? error.message : String(error);
   return { kind: "endpoint", message };
+}
+
+/**
+ * The reply as a peer that negotiated `peerVersion` may receive it — the
+ * per-connection downgrade that makes v8 backward compatible. Below
+ * {@linkcode CONFLICT_SINCE_VERSION}, a `conflict` failure becomes
+ * `endpoint` with the message `conflict: {msg}`: exactly the bytes a v7
+ * server sends for the same core error, since a v7 kernel has no Conflict
+ * variant and falls back to the error's Display (`conflict: {msg}`). Every
+ * other reply passes through unchanged (the same object).
+ *
+ * ```ts
+ * import { replyForPeer } from "./wire.ts";
+ * const reply = {
+ *   kind: "errorTyped",
+ *   failure: { kind: "conflict", message: "square taken" },
+ * } as const;
+ * replyForPeer(reply, 7); // { kind: "errorTyped", failure: { kind: "endpoint", message: "conflict: square taken" } }
+ * replyForPeer(reply, 8) === reply; // true
+ * ```
+ */
+export function replyForPeer(reply: Reply, peerVersion: number): Reply {
+  if (
+    peerVersion < CONFLICT_SINCE_VERSION && reply.kind === "errorTyped" &&
+    reply.failure.kind === "conflict"
+  ) {
+    return {
+      kind: "errorTyped",
+      failure: {
+        kind: "endpoint",
+        message: `conflict: ${reply.failure.message}`,
+      },
+    };
+  }
+  return reply;
 }
 
 export type Reply =
@@ -673,6 +775,10 @@ function putWireFailure(out: Writer, failure: WireFailure): void {
       break;
     case "unavailable":
       out.varint(7);
+      out.string(failure.message);
+      break;
+    case "conflict":
+      out.varint(8);
       out.string(failure.message);
       break;
   }
@@ -869,6 +975,8 @@ function getWireFailure(r: Reader): WireFailure {
       return { kind: "timeout", message: r.string() };
     case 7:
       return { kind: "unavailable", message: r.string() };
+    case 8:
+      return { kind: "conflict", message: r.string() };
     default:
       // The taxonomy is append-only, and every existing variant carries its
       // message as a leading string; read it so an unknown FUTURE variant

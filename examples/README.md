@@ -21,9 +21,9 @@ Every app serves the same surface:
   _discovers_ what it can reach instead of hard-coding it
 - wire errors arrive **typed** (v7) and map to truthful statuses (shared mapping
   in `http_status.ts`): `DeniedError` → **403**, `NotFoundError` → **404**,
-  `InvalidArgumentError`/`MissingArgumentError` → **400**, transient
-  (timeout/unavailable) → **503**, anything else → **502**; a `ConnectionLost` →
-  **503** ("is the peer running?")
+  `ConflictError` → **409** (v8), `InvalidArgumentError`/`MissingArgumentError`
+  → **400**, transient (timeout/unavailable) → **503**, anything else → **502**;
+  a `ConnectionLost` → **503** ("is the peer running?")
 - the cache verdict is visible: an `X-Ikigai-Cache` response header in Hono and
   Oak, printed in each result fragment in Fresh
 

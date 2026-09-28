@@ -177,10 +177,11 @@ export class Client {
   }
 
   /**
-   * The version the server declared in its hello — since v7 that is always
-   * a real number (the hello is required; a server that cannot speak it is
-   * refused at connect). Re-read after a redial: a restarted peer states its
-   * version afresh.
+   * The version this connection NEGOTIATED — what the server's hello
+   * answered, `MIN_PROTOCOL_VERSION` up to `PROTOCOL_VERSION` (a v7 server
+   * reads 7, a v8 server 8). Since v7 it is always a real number (the hello
+   * is required; a server outside that range is refused at connect).
+   * Re-read after a redial: a restarted peer states its version afresh.
    */
   get serverVersion(): number {
     return this.#serverVersion;
@@ -431,6 +432,10 @@ export class Client {
  * hangs up on the hello predates v6 entirely and is refused with that
  * diagnosis; a peer that is merely SILENT is reported as hung (bounded by
  * `timeoutMs`), never misdiagnosed as ancient.
+ *
+ * Since v8 an OLDER server within `MIN_PROTOCOL_VERSION` is spoken to at its
+ * own version: a v7 server answers this client's v8 hello with 7 and hangs up
+ * (v7 closes on any unequal hello), so the client redials once, saying 7.
  */
 export async function connect(
   path?: string,
@@ -456,9 +461,18 @@ export async function connect(
 }
 
 /**
- * Dial and complete the version hello. Shared by {@linkcode connect} and the
- * client's redial, so a reconnection replays exactly the handshake the
- * original connection made.
+ * Dial and complete the version hello, falling back ONCE to an older
+ * server's version. Shared by {@linkcode connect} and the client's redial,
+ * so a reconnection replays exactly the handshake the original connection
+ * made — including the fallback, since a restarted peer may have been
+ * upgraded or downgraded across its bounce.
+ *
+ * The fallback exists because the v7 server's rule is "unequal versions get
+ * the answer and a close": it cannot tell a v8 client it will serve v7 on
+ * the same connection. An answer between `MIN_PROTOCOL_VERSION` and ours is
+ * therefore a server that has ALREADY hung up, and the only way to speak its
+ * version is a fresh dial that says it. The second hello must then be
+ * answered with exactly that version; anything else is a mismatch.
  */
 async function handshake(
   socketPath: string,
@@ -468,6 +482,53 @@ async function handshake(
   conn: Deno.UnixConn;
   stream: FrameStream;
   serverVersion: number;
+}> {
+  const first = await helloOnce(
+    socketPath,
+    mode,
+    timeoutMs,
+    wire.PROTOCOL_VERSION,
+  );
+  const answered = first.answer.version;
+  if (answered === wire.PROTOCOL_VERSION) {
+    return { conn: first.conn, stream: first.stream, serverVersion: answered };
+  }
+  first.conn.close();
+  if (
+    answered < wire.MIN_PROTOCOL_VERSION || answered > wire.PROTOCOL_VERSION
+  ) {
+    throw mismatch(answered, wire.PROTOCOL_VERSION);
+  }
+  // An older server we still speak: redial at its version.
+  const second = await helloOnce(socketPath, mode, timeoutMs, answered);
+  if (second.answer.version !== answered) {
+    second.conn.close();
+    throw mismatch(second.answer.version, answered);
+  }
+  return { conn: second.conn, stream: second.stream, serverVersion: answered };
+}
+
+function mismatch(serverVersion: number, offered: number): ProtocolError {
+  const range = offered === wire.MIN_PROTOCOL_VERSION
+    ? `v${offered}`
+    : `v${wire.MIN_PROTOCOL_VERSION}–v${offered}`;
+  return new ProtocolError(
+    `the kernel server speaks wire v${serverVersion}, this client ` +
+      `speaks ${range} (native v${wire.PROTOCOL_VERSION}) — update the older ` +
+      "side",
+  );
+}
+
+/** One dial and one hello exchange at `version`; returns the raw answer. */
+async function helloOnce(
+  socketPath: string,
+  mode: HelloMode,
+  timeoutMs: number | null,
+  version: number,
+): Promise<{
+  conn: Deno.UnixConn;
+  stream: FrameStream;
+  answer: wire.Hello;
 }> {
   const conn = await dial(socketPath);
   const stream = new FrameStream(conn);
@@ -487,9 +548,7 @@ async function handshake(
   }
   let answer: wire.Hello | null;
   try {
-    await stream.writeFrame(
-      wire.encodeHello(wire.hello(wire.PROTOCOL_VERSION, mode)),
-    );
+    await stream.writeFrame(wire.encodeHello(wire.hello(version, mode)));
     answer = wire.decodeHello(await stream.readFrame());
   } catch (e) {
     try {
@@ -521,14 +580,7 @@ async function handshake(
         "entirely",
     );
   }
-  if (answer.version !== wire.PROTOCOL_VERSION) {
-    conn.close();
-    throw new ProtocolError(
-      `the kernel server speaks wire v${answer.version}, this client ` +
-        `speaks v${wire.PROTOCOL_VERSION} — update the older side`,
-    );
-  }
-  return { conn, stream, serverVersion: answer.version };
+  return { conn, stream, answer };
 }
 
 async function dial(path: string): Promise<Deno.UnixConn> {

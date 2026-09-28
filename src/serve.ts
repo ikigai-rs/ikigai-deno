@@ -46,9 +46,11 @@
  * a missing required argument a `MissingArgument`, a zod validation failure
  * an `InvalidArgument` naming the field, a handler throw an `Endpoint` — and
  * a handler may throw the typed classes (`NotFoundError`, `DeniedError`,
- * `TimeoutError`, `UnavailableError`, …) to cross as that variant, so a Deno
- * peer can answer a real 404-equivalent the host recognizes without message
- * sniffing.
+ * `TimeoutError`, `UnavailableError`, `ConflictError`, …) to cross as that
+ * variant, so a Deno peer can answer a real 404-equivalent the host
+ * recognizes without message sniffing. A `ConflictError` (wire v8) reaches a
+ * v7 host as the `Endpoint` text `conflict: {msg}` — what a v7 kernel sends
+ * for the same error — because that host cannot decode variant 8.
  *
  * **Security posture**: the socket is `0600` in a `0700` directory. Deno
  * exposes no SO_PEERCRED / LOCAL_PEERCRED equivalent, so unlike the Rust and
@@ -1285,12 +1287,14 @@ export class Server {
 
   async #handle(conn: Deno.UnixConn): Promise<void> {
     const stream = new FrameStream(conn);
-    // The FIRST frame must be the hello (wire v7): it is answered with ours
-    // — equal versions proceed (and its mode picks this connection's
-    // entries form), unequal versions get the answer (so the client names
-    // both in its error) and a close. A frame WITHOUT the magic is a
-    // pre-v6 client; it is REFUSED (the v6 serve-it-anyway tolerance is
-    // over — this fleet updates together).
+    // The FIRST frame must be the hello (wire v7): it is answered with the
+    // NEGOTIATED version (v8) — a v7 or v8 client proceeds at the lower of
+    // its version and ours (and its mode picks this connection's entries
+    // form); an older client gets OUR version (so it names both in its
+    // error) and a close. The answer must be the negotiated version, not
+    // ours: a v7 client refuses any hello answer but 7. A frame WITHOUT the
+    // magic is a pre-v6 client; it is REFUSED (the v6 serve-it-anyway
+    // tolerance is over).
     let first: Uint8Array;
     try {
       first = await stream.readFrame();
@@ -1306,14 +1310,15 @@ export class Server {
       );
       return;
     }
+    const version = wire.negotiateVersion(hello.version);
     try {
       await stream.writeFrame(
-        wire.encodeHello(wire.hello(wire.PROTOCOL_VERSION)),
+        wire.encodeHello(wire.hello(version ?? wire.PROTOCOL_VERSION)),
       );
     } catch {
       return;
     }
-    if (hello.version !== wire.PROTOCOL_VERSION) {
+    if (version === null) {
       return; // the client renders the mismatch
     }
     const stripAlias = hello.mode === wire.HelloMode.Alias;
@@ -1324,15 +1329,22 @@ export class Server {
       } catch {
         return; // peer hung up
       }
-      if (!(await this.#serveOneFrame(stream, frame, stripAlias))) return;
+      if (!(await this.#serveOneFrame(stream, frame, stripAlias, version))) {
+        return;
+      }
     }
   }
 
-  /** Decode and answer one Call frame; `false` ends the connection. */
+  /**
+   * Decode and answer one Call frame; `false` ends the connection. Every
+   * reply passes through {@linkcode wire.replyForPeer} at the connection's
+   * negotiated `version`, so a v7 peer never sees a variant it cannot decode.
+   */
   async #serveOneFrame(
     stream: FrameStream,
     frame: Uint8Array,
     stripAlias: boolean,
+    version: number,
   ): Promise<boolean> {
     let call: wire.Call;
     try {
@@ -1354,8 +1366,9 @@ export class Server {
       return false;
     }
     try {
+      const reply = await this.space.dispatch(call, stripAlias);
       await stream.writeFrame(
-        wire.encodeReply(await this.space.dispatch(call, stripAlias)),
+        wire.encodeReply(wire.replyForPeer(reply, version)),
       );
     } catch {
       return false;

@@ -11,13 +11,17 @@ after the codec became a versioned public ABI.
 A binding = client + servable peer space; the module mechanism IS
 mount-over-wire.
 
-Wire protocol version: **7** (`PROTOCOL_VERSION`) — the version (and mount mode)
-cross the wire in a hello frame at connection open, so a mismatch is a clean
-error naming both sides, and a served peer _knows_ which entries form its
-mounter wants. Since v7 the hello is **required** (the v6 pre-hello tolerances
-are gone), and failures cross with their **taxonomy intact**: a remote denial
-arrives as `DeniedError`, a remote not-found as `NotFoundError`, a remote
-timeout as a `TimeoutError` with `transient === true` — not a flattened string.
+Wire protocol version: **8** (`PROTOCOL_VERSION`), speaking down to **7**
+(`MIN_PROTOCOL_VERSION`) — the version (and mount mode) cross the wire in a
+hello frame at connection open, so a mismatch is a clean error naming both
+sides, and a served peer _knows_ which entries form its mounter wants. Since v7
+the hello is **required** (the v6 pre-hello tolerances are gone), and failures
+cross with their **taxonomy intact**: a remote denial arrives as `DeniedError`,
+a remote not-found as `NotFoundError`, a remote timeout as a `TimeoutError` with
+`transient === true` — not a flattened string. v8 adds one kind, `ConflictError`
+(the target's current state refuses the request), and is **backward
+compatible**: a v7 host still mounts this peer and this client still drives a v7
+host.
 
 ## Install
 
@@ -92,21 +96,23 @@ Notes:
 - `connect(path, { capability: Capability.scoped([...]) })` sends requests as
   `Call::IssueAs` under that capability; the server clamps it to the principal
   the channel authenticated.
-- `k.serverVersion` is the version the server's hello declared — since v7 always
-  a real number: the hello is required, and a peer that cannot speak it is
-  refused at connect with a diagnosis (a hang-UP on the hello = pre-v6; mere
+- `k.serverVersion` is the version the connection negotiated — 7 against a v7
+  server (the client offers 8, hears 7, and redials once saying 7, because a v7
+  server hangs up on any hello but its own), 8 against a v8 one — since v7
+  always a real number: the hello is required, and a peer that cannot speak it
+  is refused at connect with a diagnosis (a hang-UP on the hello = pre-v6; mere
   SILENCE = hung/overloaded, bounded by the timeout — never misdiagnosed as
   ancient).
 - Errors surface **typed** (wire v7): `UnresolvedError`, `MissingArgumentError`,
   `InvalidArgumentError` (with `.argument`/`.detail`), `DeniedError`,
-  `NotFoundError`, `TimeoutError`, `UnavailableError` — all subclassing
-  `EndpointError`, all carrying `.transient` (`true` only for
-  timeout/unavailable, mirroring `ikigai_core::Error::is_transient`). Message
-  texts render the way the Rust kernel would. An unknown FUTURE taxonomy variant
-  degrades to the base `EndpointError`, naming the variant. A dead socket raises
-  `ConnectionLost`; a hung server trips the read deadline (default 300 s — long
-  resolutions are silent, so silence is not proof of death; same rationale as
-  the Rust client).
+  `NotFoundError`, `TimeoutError`, `UnavailableError`, and since v8
+  `ConflictError` (permanent) — all subclassing `EndpointError`, all carrying
+  `.transient` (`true` only for timeout/unavailable, mirroring
+  `ikigai_core::Error::is_transient`). Message texts render the way the Rust
+  kernel would. An unknown FUTURE taxonomy variant degrades to the base
+  `EndpointError`, naming the variant. A dead socket raises `ConnectionLost`; a
+  hung server trips the read deadline (default 300 s — long resolutions are
+  silent, so silence is not proof of death; same rationale as the Rust client).
 - The client **reconnects**: after a `ConnectionLost`, the next call redials
   once (fresh hello, same mode) before failing — a restarted peer stops meaning
   failure-forever. A call is only ever retried when its SEND failed (the frame
@@ -182,12 +188,15 @@ diagnosis.
 The taxonomy crossing the wire is what lets an HTTP face answer truthfully
 instead of 502-for-everything — the three example apps share one mapping
 (`examples/http_status.ts`): `DeniedError` → 403, `NotFoundError` → 404,
-`InvalidArgumentError`/`MissingArgumentError` → 400, transient
+`ConflictError` → 409 (v8; 412 stays for a precondition the caller stated with
+`If-Match`), `InvalidArgumentError`/`MissingArgumentError` → 400, transient
 (timeout/unavailable) → 503, anything else → 502. It also means a **served**
 Deno endpoint can speak the taxonomy: throw `NotFoundError`/`DeniedError`/
-`TimeoutError`/`UnavailableError` from a handler and it crosses as that variant
-— a Rust host's failover will treat your `UnavailableError` as transient and
-your `DeniedError` as final, and a zod validation failure crosses as a real
+`TimeoutError`/`UnavailableError`/`ConflictError` from a handler and it crosses
+as that variant (a `ConflictError` reaches a v7 host as the plain endpoint text
+`conflict: …`, which is what a v7 kernel sends for the same error) — a Rust
+host's failover will treat your `UnavailableError` as transient and your
+`DeniedError` as final, and a zod validation failure crosses as a real
 `InvalidArgument` naming the field.
 
 ### zod → ArgSpec (declare the contract once)
@@ -439,13 +448,24 @@ record the layout. Highlights a public ABI document should state:
   versions. The v6 one-version tolerances (client fallback without hello;
   serving a legacy first frame) are GONE: a hang-up on the hello is diagnosed
   pre-v6, silence is diagnosed as a hang, a magic-less first frame is refused.
+- **v8 is backward compatible with v7** (`MIN_PROTOCOL_VERSION = 7`). A server
+  answers a hello of 7 or 8 with the NEGOTIATED version (the lower one — a v7
+  client refuses any answer but 7) and serves the connection at it; below 7 it
+  answers 8 and closes. The client offers 8; an answer of 7 means a v7 server
+  that has already hung up (v7 closes on any unequal hello), so it redials once
+  saying 7. Each connection remembers its version, and a v8 server never sends a
+  v7 peer variant 8: `Conflict(msg)` goes out as `Endpoint("conflict: msg")`,
+  byte-identical to a v7 kernel's own rendering (`replyForPeer`).
 - **`Reply::ErrorTyped`** (v7): postcard discriminant **5**; payload is the
   `WireError` enum in declaration order — `Unresolved(iri)`=0,
   `MissingArgument(name)`=1, `InvalidArgument{name, detail}`=2 (two strings,
   field order), `Endpoint(msg)`=3, `Denied(msg)`=4, `NotFound(msg)`=5,
-  `Timeout(msg)`=6, `Unavailable(msg)`=7. Append-only. Timeout and Unavailable
-  are the transient pair. The flat `Reply::Error`=3 remains decodable but a v7
-  server never sends it.
+  `Timeout(msg)`=6, `Unavailable(msg)`=7, `Conflict(msg)`=8 (v8). Append-only.
+  Reference vectors, pinned byte-exact here and meant to match the Rust and
+  Python suites: `ErrorTyped(Denied("x"))` = `05 04 01 78`,
+  `ErrorTyped(Conflict("x"))` = `05 08 01 78`. Timeout and Unavailable are the
+  transient pair. The flat `Reply::Error`=3 remains decodable but a v7+ server
+  never sends it.
 - Enum discriminants are the **declaration index** as a varint — `Verb::Source`
   is `0` on the wire even though it is declared `#[repr(u8)] Source = 1` (those
   codes are only for identity hashing).

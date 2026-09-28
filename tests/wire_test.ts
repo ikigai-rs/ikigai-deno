@@ -9,6 +9,7 @@ import * as wire from "../src/wire.ts";
 import {
   CacheStatus,
   Capability,
+  ConflictError,
   content,
   DeniedError,
   EndpointError,
@@ -295,6 +296,80 @@ Deno.test("ErrorTyped wire discriminant is five (the Rust-locked vector)", () =>
   assertStrictEquals(denied[1], 4, "WireError::Denied is variant 4");
 });
 
+// The two reference vectors ikigai-wire (Rust), ikigai-python and this suite
+// pin byte-exact: Reply::ErrorTyped (5), the variant, a one-byte string "x".
+
+Deno.test('reference vector: ErrorTyped(Denied("x")) is 05 04 01 78', () => {
+  assertEquals(
+    wire.encodeReply({
+      kind: "errorTyped",
+      failure: { kind: "denied", message: "x" },
+    }),
+    new Uint8Array([0x05, 0x04, 0x01, 0x78]),
+  );
+});
+
+Deno.test('reference vector: ErrorTyped(Conflict("x")) is 05 08 01 78 — Conflict is variant 8', () => {
+  // Wire v8 APPENDS Conflict after Unavailable (7); postcard order is the
+  // contract, so it is 8 and nothing may ever be inserted before it.
+  const bytes = new Uint8Array([0x05, 0x08, 0x01, 0x78]);
+  assertEquals(
+    wire.encodeReply({
+      kind: "errorTyped",
+      failure: { kind: "conflict", message: "x" },
+    }),
+    bytes,
+  );
+  const decoded = wire.decodeReply(bytes);
+  assertEquals(decoded, {
+    kind: "errorTyped",
+    failure: { kind: "conflict", message: "x" },
+  });
+  assert(decoded.kind === "errorTyped");
+  const error = typedError(decoded.failure);
+  assertInstanceOf(error, ConflictError);
+  assertStrictEquals(error.message, "x");
+  assertStrictEquals(error.transient, false, "Conflict is PERMANENT");
+});
+
+Deno.test('the downgrade to a v7 peer: Conflict("x") becomes Endpoint("conflict: x")', () => {
+  // A v7 peer cannot decode variant 8, so a v8 server rewrites it to the
+  // exact bytes a v7 server sends for core's Error::Conflict — the Endpoint
+  // variant carrying the error's Display, `conflict: {msg}`.
+  const conflict: wire.Reply = {
+    kind: "errorTyped",
+    failure: { kind: "conflict", message: "x" },
+  };
+  const downgraded = wire.replyForPeer(conflict, 7);
+  assertEquals(
+    wire.encodeReply(downgraded),
+    b([0x05], [0x03], [0x0b], "conflict: x"),
+  );
+  // …which a v7 client reads as a plain EndpointError with that text.
+  assert(downgraded.kind === "errorTyped");
+  const error = typedError(downgraded.failure);
+  assertStrictEquals(error.constructor, EndpointError);
+  assertStrictEquals(error.message, "conflict: x");
+  // A v8 peer gets the typed variant untouched (the same object).
+  assertStrictEquals(wire.replyForPeer(conflict, 8), conflict);
+  // Nothing else is rewritten for a v7 peer.
+  const denied: wire.Reply = {
+    kind: "errorTyped",
+    failure: { kind: "denied", message: "x" },
+  };
+  assertStrictEquals(wire.replyForPeer(denied, 7), denied);
+});
+
+Deno.test("version negotiation: v7 and v8 are served, v6 is refused", () => {
+  assertStrictEquals(wire.PROTOCOL_VERSION, 8);
+  assertStrictEquals(wire.MIN_PROTOCOL_VERSION, 7);
+  assertStrictEquals(wire.negotiateVersion(8), 8);
+  assertStrictEquals(wire.negotiateVersion(7), 7);
+  assertStrictEquals(wire.negotiateVersion(6), null);
+  // A newer peer is answered with ours; the newer side decides.
+  assertStrictEquals(wire.negotiateVersion(9), 8);
+});
+
 Deno.test("ErrorTyped(InvalidArgument) golden bytes", () => {
   // The one struct-shaped variant: name then detail, declaration order.
   const expected = b(
@@ -334,6 +409,7 @@ Deno.test("every taxonomy variant crosses with kind and transience intact", () =
       UnavailableError,
       true,
     ],
+    [{ kind: "conflict", message: "square taken" }, ConflictError, false],
   ];
   for (const [failure, cls, transient] of cases) {
     const decoded = wire.decodeReply(
@@ -390,26 +466,27 @@ Deno.test("a plain thrown error degrades to the endpoint variant", () => {
 });
 
 Deno.test("an unknown FUTURE taxonomy variant degrades to a named base error", () => {
-  // Append-only means variant 8+ belongs to a newer wire revision. Every
-  // existing variant leads with its message string, so a same-shaped future
-  // variant decodes to a base EndpointError that NAMES the unknown variant.
-  const payload = b([0x05], [0x08], [0x04], "next");
+  // Append-only means variant 9+ belongs to a newer wire revision (8 is
+  // Conflict, v8). Every existing variant leads with its message string, so
+  // a same-shaped future variant decodes to a base EndpointError that NAMES
+  // the unknown variant.
+  const payload = b([0x05], [0x09], [0x04], "next");
   const decoded = wire.decodeReply(payload);
   assert(decoded.kind === "errorTyped");
   const error = typedError(decoded.failure);
   assertStrictEquals(error.constructor, EndpointError);
-  assert(error.message.includes("variant 8"), error.message);
+  assert(error.message.includes("variant 9"), error.message);
   assert(error.message.includes("next"), error.message);
 });
 
 // --- failure modes ---
 
 Deno.test("an unknown Call variant names the protocol version", () => {
-  assertThrows(() => wire.decodeCall(b([0x09])), ProtocolError, "v7");
+  assertThrows(() => wire.decodeCall(b([0x09])), ProtocolError, "v8");
 });
 
 Deno.test("an unknown Reply variant names the protocol version", () => {
-  assertThrows(() => wire.decodeReply(b([0x2a])), ProtocolError, "protocol v7");
+  assertThrows(() => wire.decodeReply(b([0x2a])), ProtocolError, "protocol v8");
 });
 
 Deno.test("a truncated payload is a protocol error", () => {
