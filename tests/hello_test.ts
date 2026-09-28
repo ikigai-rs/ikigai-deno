@@ -266,23 +266,30 @@ Deno.test("v8 server: a v8 peer receives the typed Conflict", async () => {
   }
 });
 
-Deno.test("v8 server: a v6 hello is answered 8 and refused", async () => {
-  const dir = tempSocketDir();
-  const path = `${dir}/v6.sock`;
-  const server = conflictServer(path);
-  const serving = server.serve();
-  try {
-    const conn = await Deno.connect({ transport: "unix", path });
-    const stream = new FrameStream(conn);
-    await stream.writeFrame(wire.encodeHello(wire.hello(6)));
-    // Our own version, so the v6 client can name both — then a close.
-    assertEquals(wire.decodeHello(await stream.readFrame()), wire.hello(8));
-    await assertRejects(() => stream.readFrame(), EofError);
-    conn.close();
-  } finally {
-    server.shutdown();
-    await serving;
-    Deno.removeSync(dir, { recursive: true });
+Deno.test("v8 server: hellos of 6 and 9 are answered 8 and refused", async () => {
+  // Outside 7..=8 in EITHER direction: our version, so the peer can name
+  // both, then a close — the rule the Rust and Python halves share.
+  for (const offered of [6, 9]) {
+    const dir = tempSocketDir();
+    const path = `${dir}/out.sock`;
+    const server = conflictServer(path);
+    const serving = server.serve();
+    try {
+      const conn = await Deno.connect({ transport: "unix", path });
+      const stream = new FrameStream(conn);
+      await stream.writeFrame(wire.encodeHello(wire.hello(offered)));
+      assertEquals(
+        wire.decodeHello(await stream.readFrame()),
+        wire.hello(8),
+        `offered v${offered}`,
+      );
+      await assertRejects(() => stream.readFrame(), EofError);
+      conn.close();
+    } finally {
+      server.shutdown();
+      await serving;
+      Deno.removeSync(dir, { recursive: true });
+    }
   }
 });
 

@@ -360,14 +360,15 @@ Deno.test('the downgrade to a v7 peer: Conflict("x") becomes Endpoint("conflict:
   assertStrictEquals(wire.replyForPeer(denied, 7), denied);
 });
 
-Deno.test("version negotiation: v7 and v8 are served, v6 is refused", () => {
+Deno.test("version negotiation: v7 and v8 are served at their own version, v6 and v9 are refused", () => {
   assertStrictEquals(wire.PROTOCOL_VERSION, 8);
   assertStrictEquals(wire.MIN_PROTOCOL_VERSION, 7);
   assertStrictEquals(wire.negotiateVersion(8), 8);
   assertStrictEquals(wire.negotiateVersion(7), 7);
   assertStrictEquals(wire.negotiateVersion(6), null);
-  // A newer peer is answered with ours; the newer side decides.
-  assertStrictEquals(wire.negotiateVersion(9), 8);
+  // A newer peer is refused too — the same rule the Rust and Python halves
+  // follow; a newer client that speaks down redials at our version.
+  assertStrictEquals(wire.negotiateVersion(9), null);
 });
 
 Deno.test("ErrorTyped(InvalidArgument) golden bytes", () => {
