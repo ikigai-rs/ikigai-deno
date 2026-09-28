@@ -449,9 +449,9 @@ record the layout. Highlights a public ABI document should state:
   serving a legacy first frame) are GONE: a hang-up on the hello is diagnosed
   pre-v6, silence is diagnosed as a hang, a magic-less first frame is refused.
 - **v8 is backward compatible with v7** (`MIN_PROTOCOL_VERSION = 7`). A server
-  answers a hello of 7 or 8 with the NEGOTIATED version (the lower one — a v7
-  client refuses any answer but 7) and serves the connection at it; below 7 it
-  answers 8 and closes. The client offers 8; an answer of 7 means a v7 server
+  answers a hello of 7 or 8 with the PEER's own version (a v7 client refuses any
+  answer but 7) and serves the connection at it; any other hello (6, 9) is
+  answered 8 and closed. The client offers 8; an answer of 7 means a v7 server
   that has already hung up (v7 closes on any unequal hello), so it redials once
   saying 7. Each connection remembers its version, and a v8 server never sends a
   v7 peer variant 8: `Conflict(msg)` goes out as `Endpoint("conflict: msg")`,

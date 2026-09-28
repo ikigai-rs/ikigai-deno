@@ -363,6 +363,23 @@ Deno.test("ttt app: a play is a Sink through the host, a refusal is answered", a
   assertEquals(host.writes, ["move:1:0", "move:0:0", "reset"]);
 });
 
+Deno.test("ttt app: a Conflict from the host answers 409 in core's Display", async () => {
+  // Wire v8: a host whose state refuses a read crosses a typed Conflict,
+  // which ikigai-web's error_resp answers 409 — permanent, never a 503.
+  const host = standIn();
+  const source = host.source;
+  host.source = (iri: string) =>
+    iri.endsWith(":turn")
+      ? Promise.reject(new ConflictError("the game is being reset"))
+      : source(iri);
+  const [code, body] = await call(
+    host,
+    "GET",
+    "/game/a/iki/tutorial/ttt/view/status",
+  );
+  assertEquals([code, body], [409, "conflict: the game is being reset"]);
+});
+
 Deno.test("ttt app: wrong verbs, bad coordinates and unknown games are refused", async () => {
   const host = standIn();
   const view = "iki/tutorial/ttt/view";

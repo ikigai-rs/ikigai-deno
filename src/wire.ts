@@ -32,7 +32,7 @@
  * variant — `Conflict`, variant 8 (see {@linkcode ConflictError}) — and
  * nothing else, so a flag day would have bought nothing but an outage. A v8
  * peer accepts a hello of {@linkcode MIN_PROTOCOL_VERSION} (7) or 8 and
- * answers with the NEGOTIATED version, the lower of the two; each connection
+ * answers with the PEER's version (anything else is refused); each connection
  * remembers it, and a v8 server never sends variant 8 to a v7 peer — it
  * downgrades `Conflict(msg)` to `Endpoint("conflict: {msg}")`, byte-identical
  * to what a v7 server sends for the same core error (see
@@ -55,31 +55,38 @@ import { DecodeError, Reader, Writer } from "./postcard.ts";
 export const PROTOCOL_VERSION = 8;
 
 /**
- * The oldest peer version this side still speaks. A hello below it is
- * refused (answered with {@linkcode PROTOCOL_VERSION}, so the peer can name
- * both versions, then closed); a hello from here up to
- * {@linkcode PROTOCOL_VERSION} is served at the lower of the two versions.
+ * The oldest peer version this side still speaks. A hello from here up to
+ * {@linkcode PROTOCOL_VERSION} is served at the PEER's version; any other
+ * hello (older, or newer than this side) is refused — answered with
+ * {@linkcode PROTOCOL_VERSION}, so the peer can name both versions, then
+ * closed.
  */
 export const MIN_PROTOCOL_VERSION = 7;
 
 /**
- * The version a connection runs at, given the peer's hello: the lower of the
- * two sides, or `null` when the peer is older than
- * {@linkcode MIN_PROTOCOL_VERSION} and must be refused. A peer NEWER than
- * this side is answered with {@linkcode PROTOCOL_VERSION}; whether that is
- * acceptable is the newer side's decision, the same one this side makes
- * about a v7 peer.
+ * The version a connection runs at, given the peer's hello: the PEER's own
+ * version when it lies in {@linkcode MIN_PROTOCOL_VERSION} ..=
+ * {@linkcode PROTOCOL_VERSION}, else `null` — refused. The accepted answer
+ * must echo the peer's version exactly, because a v7 client refuses any
+ * answer but 7. A NEWER peer (9) is refused too, as the Rust and Python
+ * halves refuse it: accepting upward is the newer side's job, which it does
+ * by redialing at our version, the way this client redials a v7 server.
  *
  * ```ts
  * import { negotiateVersion } from "./wire.ts";
  * negotiateVersion(8); // 8
  * negotiateVersion(7); // 7 — a v7 peer is served at v7
  * negotiateVersion(6); // null — refused
+ * negotiateVersion(9); // null — refused
  * ```
  */
 export function negotiateVersion(peerVersion: number): number | null {
-  if (peerVersion < MIN_PROTOCOL_VERSION) return null;
-  return Math.min(peerVersion, PROTOCOL_VERSION);
+  if (
+    peerVersion < MIN_PROTOCOL_VERSION || peerVersion > PROTOCOL_VERSION
+  ) {
+    return null;
+  }
+  return peerVersion;
 }
 
 /** The first wire version that carries `WireError::Conflict` (variant 8). */

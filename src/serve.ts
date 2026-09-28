@@ -1287,12 +1287,12 @@ export class Server {
 
   async #handle(conn: Deno.UnixConn): Promise<void> {
     const stream = new FrameStream(conn);
-    // The FIRST frame must be the hello (wire v7): it is answered with the
-    // NEGOTIATED version (v8) — a v7 or v8 client proceeds at the lower of
-    // its version and ours (and its mode picks this connection's entries
-    // form); an older client gets OUR version (so it names both in its
-    // error) and a close. The answer must be the negotiated version, not
-    // ours: a v7 client refuses any hello answer but 7. A frame WITHOUT the
+    // The FIRST frame must be the hello (wire v7): a v7 or v8 client is
+    // answered with ITS OWN version and served at it (v8), and its mode
+    // picks this connection's entries form; any other version (6, 9) gets
+    // OUR version (so it names both in its error) and a close. The answer
+    // must echo the client, not say 8: a v7 client refuses any hello
+    // answer but 7. A frame WITHOUT the
     // magic is a pre-v6 client; it is REFUSED (the v6 serve-it-anyway
     // tolerance is over).
     let first: Uint8Array;
