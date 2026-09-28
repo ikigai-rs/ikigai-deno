@@ -55,7 +55,11 @@ Deno.test("a restarted server is redialed transparently", async () => {
     try {
       const rep = await k.source("urn:ts:hello", { who: "two" });
       assertStrictEquals(rep.text, "Hello, two!");
-      assertStrictEquals(k.serverVersion, 7, "the redial re-ran the hello");
+      assertStrictEquals(
+        k.serverVersion,
+        wire.PROTOCOL_VERSION,
+        "the redial re-ran the hello",
+      );
     } finally {
       second.shutdown();
       await secondServing;
@@ -155,8 +159,8 @@ Deno.test("a call cut mid-reply fails without replay; the NEXT call redials", as
   }
 });
 
-Deno.test("a redialed v7 server's typed errors cross typed", async () => {
-  // The redial replays the full v7 handshake; the fresh connection then
+Deno.test("a redialed server's typed errors cross typed", async () => {
+  // The redial replays the full handshake; the fresh connection then
   // answers with ErrorTyped, and the taxonomy still crosses — a restarted
   // peer's denial is a real DeniedError, not a flattened string.
   const dir = Deno.makeTempDirSync({ prefix: "ik-deno-reconnect-" });
@@ -183,7 +187,11 @@ Deno.test("a redialed v7 server's typed errors cross typed", async () => {
         "needs urn:cap:x",
       );
       assertStrictEquals(err.transient, false);
-      assertStrictEquals(k.serverVersion, 7, "the redial re-ran the hello");
+      assertStrictEquals(
+        k.serverVersion,
+        wire.PROTOCOL_VERSION,
+        "the redial re-ran the hello",
+      );
     } finally {
       second.shutdown();
       await secondServing;

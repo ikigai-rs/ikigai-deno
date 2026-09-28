@@ -13,6 +13,7 @@
 import { assert, assertEquals, assertStrictEquals } from "@std/assert";
 import { connect } from "../src/client.ts";
 import {
+  ConflictError,
   EndpointError,
   InvalidArgumentError,
   NotFoundError,
@@ -129,6 +130,11 @@ Deno.test("ttt app: a refusal reads as the Rust kernel's Display prints it", () 
   assertStrictEquals(
     rustDisplay(new EndpointError("boom")),
     "endpoint error: boom",
+  );
+  // Core's `Error::Conflict` Display (0.1.80), carried typed since wire v8.
+  assertStrictEquals(
+    rustDisplay(new ConflictError("square taken")),
+    "conflict: square taken",
   );
   assertStrictEquals(
     rustDisplay(new UnresolvedError("urn:x")),

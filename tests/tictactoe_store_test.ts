@@ -5,8 +5,8 @@
  * Source -> Sink -> Source round trip shows the HOST's cached read cut by
  * the write (the reads counter proves which reads ran here).
  *
- * The host half skips when no v7 `ikigai` binary is installed (CI has no
- * Rust host).
+ * The host half skips when no `ikigai` binary this package speaks (v7 or v8)
+ * is installed (CI has no Rust host).
  */
 
 import { assertEquals, assertRejects, assertStrictEquals } from "@std/assert";
@@ -15,7 +15,6 @@ import {
   InvalidArgumentError,
   MissingArgumentError,
   NotFoundError,
-  PROTOCOL_VERSION,
 } from "../src/wire.ts";
 import { connect } from "../src/client.ts";
 import { Server } from "../src/serve.ts";
@@ -26,7 +25,12 @@ import {
   storedCell,
   storedName,
 } from "../examples/tictactoe_store.ts";
-import { findIkigai, probeWireVersion, spawnServe } from "./rust_host.ts";
+import {
+  findIkigai,
+  probeWireVersion,
+  spawnServe,
+  speaksWireVersion,
+} from "./rust_host.ts";
 
 const IKIGAI = findIkigai();
 const RUST_WIRE_VERSION = await probeWireVersion(IKIGAI);
@@ -156,7 +160,7 @@ Deno.test("ttt: the family is listed by its template, as ttt-stored", async () =
 
 Deno.test({
   name: "ttt: through a real Rust host, a Sink cuts the host's cached read",
-  ignore: IKIGAI === null || RUST_WIRE_VERSION !== PROTOCOL_VERSION,
+  ignore: IKIGAI === null || !speaksWireVersion(RUST_WIRE_VERSION),
   sanitizeResources: false,
   sanitizeOps: false,
   fn: async () => {
@@ -221,7 +225,7 @@ Deno.test({
 Deno.test({
   name:
     "ttt: through a STRIPPING mount (`--mount urn:iki:=`), the alias form answers",
-  ignore: IKIGAI === null || RUST_WIRE_VERSION !== PROTOCOL_VERSION,
+  ignore: IKIGAI === null || !speaksWireVersion(RUST_WIRE_VERSION),
   sanitizeResources: false,
   sanitizeOps: false,
   fn: async () => {

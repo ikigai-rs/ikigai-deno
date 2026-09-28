@@ -2,6 +2,10 @@
  * The wire hello: codec golden bytes, mismatch errors, and the v7 postures —
  * pre-hello peers are REFUSED with a diagnosis (the v6 tolerances are gone),
  * and a silent server is reported as hung, never misdiagnosed as ancient.
+ *
+ * And the v8 posture, which is the opposite of v7's: backward compatible. A
+ * v7 hello is served at v7 with Conflict downgraded, a v6 hello is refused,
+ * and this client falls back to a v7 server's version by redialing.
  */
 
 import {
@@ -13,10 +17,13 @@ import {
 } from "@std/assert";
 import * as wire from "../src/wire.ts";
 import {
+  ConflictError,
+  EndpointError,
   EofError,
   FrameStream,
   HelloMode,
   ProtocolError,
+  Verb,
 } from "../src/wire.ts";
 import { connect, ConnectionLost } from "../src/client.ts";
 import { endpoint, Server } from "../src/serve.ts";
@@ -96,7 +103,7 @@ Deno.test("a version mismatch names both versions", async () => {
   })();
   const err = await assertRejects(() => connect(path), ProtocolError);
   assertMatch(err.message, /v9/);
-  assertMatch(err.message, /v7/);
+  assertMatch(err.message, /v8/);
   await server;
   listener.close();
   Deno.removeSync(dir, { recursive: true });
@@ -117,7 +124,7 @@ Deno.test("a pre-hello server is diagnosed, not tolerated", async () => {
   })();
   const err = await assertRejects(() => connect(path), ProtocolError);
   assert(err.message.includes("predates wire v6"), err.message);
-  assert(err.message.includes("v7"), err.message);
+  assert(err.message.includes("v8"), err.message);
   await server;
   listener.close();
   Deno.removeSync(dir, { recursive: true });
@@ -181,6 +188,194 @@ Deno.test("a pre-hello client is refused", async () => {
   server.shutdown();
   await serving;
   Deno.removeSync(dir, { recursive: true });
+});
+
+// --- wire v8: backward compatible with v7 ---
+
+/** A Deno server with one endpoint that refuses with a Conflict. */
+function conflictServer(path: string): Server {
+  const clash = endpoint(
+    "urn:ts:clash",
+    { summary: "always in conflict" },
+    () => {
+      throw new ConflictError("square taken");
+    },
+  );
+  return new Server([clash], path);
+}
+
+const CLASH_CALL = wire.encodeCall({
+  kind: "issue",
+  request: { verb: Verb.Source, target: "urn:ts:clash", args: {} },
+});
+
+Deno.test("v8 server: a pinned v7 hello is answered 7 and served, Conflict downgraded", async () => {
+  // Exactly what an installed v7 host sends. The answer MUST be 7, not our
+  // 8: a v7 client refuses any hello answer but its own version.
+  const dir = tempSocketDir();
+  const path = `${dir}/v7.sock`;
+  const server = conflictServer(path);
+  const serving = server.serve();
+  try {
+    const conn = await Deno.connect({ transport: "unix", path });
+    const stream = new FrameStream(conn);
+    await stream.writeFrame(
+      new Uint8Array([...utf8.encode("IKWH"), 0x00, 0x00, 0x00, 0x07, 0x00]),
+    );
+    assertEquals(
+      await stream.readFrame(),
+      new Uint8Array([...utf8.encode("IKWH"), 0x00, 0x00, 0x00, 0x07, 0x00]),
+    );
+    await stream.writeFrame(CLASH_CALL);
+    // The v7 bytes for core's Error::Conflict: Endpoint("conflict: {msg}").
+    assertEquals(
+      await stream.readFrame(),
+      new Uint8Array([
+        0x05, // Reply::ErrorTyped
+        0x03, // WireError::Endpoint — NOT 8, which a v7 peer cannot decode
+        0x16,
+        ...utf8.encode("conflict: square taken"),
+      ]),
+    );
+    conn.close();
+  } finally {
+    server.shutdown();
+    await serving;
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
+
+Deno.test("v8 server: a v8 peer receives the typed Conflict", async () => {
+  const dir = tempSocketDir();
+  const path = `${dir}/v8.sock`;
+  const server = conflictServer(path);
+  const serving = server.serve();
+  try {
+    await using k = await connect(path);
+    assertStrictEquals(k.serverVersion, 8);
+    const err = await assertRejects(
+      () => k.source("urn:ts:clash"),
+      ConflictError,
+    );
+    assertStrictEquals(err.message, "square taken");
+    assertStrictEquals(err.transient, false);
+  } finally {
+    server.shutdown();
+    await serving;
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
+
+Deno.test("v8 server: a v6 hello is answered 8 and refused", async () => {
+  const dir = tempSocketDir();
+  const path = `${dir}/v6.sock`;
+  const server = conflictServer(path);
+  const serving = server.serve();
+  try {
+    const conn = await Deno.connect({ transport: "unix", path });
+    const stream = new FrameStream(conn);
+    await stream.writeFrame(wire.encodeHello(wire.hello(6)));
+    // Our own version, so the v6 client can name both — then a close.
+    assertEquals(wire.decodeHello(await stream.readFrame()), wire.hello(8));
+    await assertRejects(() => stream.readFrame(), EofError);
+    conn.close();
+  } finally {
+    server.shutdown();
+    await serving;
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
+
+/**
+ * A stand-in for an installed v7 server, with v7's hello rule: answer with
+ * 7, and hang up unless the client said 7. Records every hello it heard.
+ */
+function fakeV7Server(path: string, heard: number[]): {
+  listener: Deno.Listener;
+  done: Promise<void>;
+} {
+  const listener = Deno.listen({ transport: "unix", path });
+  const done = (async () => {
+    for await (const conn of listener) {
+      const stream = new FrameStream(conn);
+      try {
+        const h = wire.decodeHello(await stream.readFrame());
+        heard.push(h!.version);
+        await stream.writeFrame(wire.encodeHello(wire.hello(7)));
+        if (h!.version !== 7) continue;
+        const call = wire.decodeCall(await stream.readFrame());
+        assertStrictEquals(call.kind, "issue");
+        // v7's rendering of core's Error::Conflict.
+        await stream.writeFrame(wire.encodeReply({
+          kind: "errorTyped",
+          failure: { kind: "endpoint", message: "conflict: square taken" },
+        }));
+        await stream.readFrame(); // until the client hangs up
+      } catch {
+        // the client hung up
+      } finally {
+        try {
+          conn.close();
+        } catch {
+          // already closed
+        }
+      }
+    }
+  })();
+  return { listener, done };
+}
+
+Deno.test("v8 client: a v7 server's answer triggers ONE redial at v7", async () => {
+  const dir = tempSocketDir();
+  const path = `${dir}/v7srv.sock`;
+  const heard: number[] = [];
+  const { listener, done } = fakeV7Server(path, heard);
+  try {
+    await using k = await connect(path);
+    assertStrictEquals(k.serverVersion, 7);
+    assertEquals(heard, [8, 7], "offered 8, heard 7, redialed saying 7");
+    // A v7 server's conflict is untyped text; the client does NOT sniff it
+    // back into a ConflictError.
+    const err = await assertRejects(
+      () => k.source("urn:ts:clash"),
+      EndpointError,
+    );
+    assertStrictEquals(err.constructor, EndpointError);
+    assertStrictEquals(err.message, "conflict: square taken");
+  } finally {
+    listener.close();
+    await done;
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
+
+Deno.test("v8 client: a v6 server is refused without a redial", async () => {
+  const dir = tempSocketDir();
+  const path = `${dir}/v6srv.sock`;
+  const listener = Deno.listen({ transport: "unix", path });
+  let dials = 0;
+  const server = (async () => {
+    for await (const conn of listener) {
+      dials++;
+      const stream = new FrameStream(conn);
+      try {
+        await stream.readFrame();
+        await stream.writeFrame(wire.encodeHello(wire.hello(6)));
+      } finally {
+        conn.close();
+      }
+    }
+  })();
+  try {
+    const err = await assertRejects(() => connect(path), ProtocolError);
+    assertMatch(err.message, /v6/);
+    assertMatch(err.message, /v8/);
+    assertStrictEquals(dials, 1);
+  } finally {
+    listener.close();
+    await server;
+    Deno.removeSync(dir, { recursive: true });
+  }
 });
 
 // --- FrameStream edges (in-memory) ---

@@ -3,10 +3,16 @@
  *
  * Skips cleanly when the `ikigai` binary is absent (CI has no Rust host;
  * these run locally against `~/.cargo/bin/ikigai`). The binary's wire
- * version is PROBED first: a v7 binary runs the full suite; an older (v6)
- * binary runs the MISMATCH suite instead — v7 removed the tolerances, so
- * the correct cross-version behavior is a clean error naming both versions,
- * and that is what gets asserted.
+ * version is PROBED first: a binary this package still speaks (v7 or v8 —
+ * v8 is backward compatible) runs the full suite; an older (v6) binary runs
+ * the MISMATCH suite instead — v7 removed the tolerances, so the correct
+ * cross-version behavior is a clean error naming both versions, and that is
+ * what gets asserted.
+ *
+ * Against a v7 binary the full suite IS the v8 backward-compatibility proof:
+ * this v8 client talks to a v7 server (by redialing at 7) and a v7 host
+ * mounts this v8 peer (served at 7, Conflict downgraded). The v8↔v8 round
+ * trip needs a v8 binary and is only exercised once one is installed.
  *
  * A SECOND probe covers a second host-version axis: the `urn:iki:fn:`
  * resources named here need `ikigai-cli` 0.1.18 or newer, a floor no
@@ -23,6 +29,8 @@
 import { assert, assertEquals, assertStrictEquals } from "@std/assert";
 import {
   CacheStatus,
+  ConflictError,
+  MIN_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   ProtocolError,
   UnresolvedError,
@@ -35,6 +43,7 @@ import {
   probeIkiFn,
   probeWireVersion,
   spawnServe,
+  speaksWireVersion,
 } from "./rust_host.ts";
 
 const IKIGAI = findIkigai();
@@ -42,11 +51,15 @@ const RUST_WIRE_VERSION = await probeWireVersion(IKIGAI);
 const HAS_IKI_FN = await probeIkiFn(IKIGAI);
 const utf8 = new TextDecoder();
 
+/** Whether this package still speaks the installed binary's wire version. */
+const SPOKEN = speaksWireVersion(RUST_WIRE_VERSION);
+
 if (IKIGAI !== null) {
   console.error(
     `integration: ${IKIGAI} speaks wire v${RUST_WIRE_VERSION}; ` +
-      (RUST_WIRE_VERSION === PROTOCOL_VERSION
-        ? "running the full suite"
+      (SPOKEN
+        ? `running the full suite (this package: v${PROTOCOL_VERSION}, ` +
+          `speaks down to v${MIN_PROTOCOL_VERSION})`
         : "running the version-mismatch suite"),
   );
   if (!HAS_IKI_FN) {
@@ -58,11 +71,11 @@ if (IKIGAI !== null) {
   }
 }
 
-/** Full integration: needs a binary speaking OUR wire version. */
+/** Full integration: needs a binary speaking a wire version we speak. */
 function integration(name: string, fn: () => Promise<void>): void {
   Deno.test({
     name,
-    ignore: IKIGAI === null || RUST_WIRE_VERSION !== PROTOCOL_VERSION,
+    ignore: IKIGAI === null || !SPOKEN,
     // The Rust CLI child and the in-process server cross test boundaries in
     // ways the strict sanitizers dislike; cleanup is explicit instead.
     sanitizeResources: false,
@@ -78,20 +91,18 @@ function integration(name: string, fn: () => Promise<void>): void {
 function fnIntegration(name: string, fn: () => Promise<void>): void {
   Deno.test({
     name,
-    ignore: IKIGAI === null || RUST_WIRE_VERSION !== PROTOCOL_VERSION ||
-      !HAS_IKI_FN,
+    ignore: IKIGAI === null || !SPOKEN || !HAS_IKI_FN,
     sanitizeResources: false,
     sanitizeOps: false,
     fn,
   });
 }
 
-/** Mismatch integration: needs an OLDER hello-speaking (v6) binary. */
+/** Mismatch integration: needs a hello-speaking binary we do NOT speak (v6). */
 function mismatchIntegration(name: string, fn: () => Promise<void>): void {
   Deno.test({
     name,
-    ignore: IKIGAI === null || RUST_WIRE_VERSION === null ||
-      RUST_WIRE_VERSION === PROTOCOL_VERSION,
+    ignore: IKIGAI === null || RUST_WIRE_VERSION === null || SPOKEN,
     sanitizeResources: false,
     sanitizeOps: false,
     fn,
@@ -134,12 +145,21 @@ async function runReplExpectingTrouble(
   return utf8.decode(out.stdout) + utf8.decode(out.stderr);
 }
 
+/** A peer endpoint whose target's state always refuses (wire v8 Conflict). */
+const clash = endpoint(
+  "urn:ts:clash",
+  { summary: "always in conflict" },
+  () => {
+    throw new ConflictError("square taken");
+  },
+);
+
 async function withDenoPeer(
   fn: (socketPath: string) => Promise<void>,
 ): Promise<void> {
   const dir = Deno.makeTempDirSync({ prefix: "ik-deno-" });
   const path = `${dir}/ts.sock`;
-  const server = new Server([hello, shout], path);
+  const server = new Server([hello, shout, clash], path);
   const serving = server.serve();
   try {
     await fn(path);
@@ -234,6 +254,27 @@ integration("a typed Deno error reaches the Rust user natively", async () => {
   });
 });
 
+integration(
+  "a Deno Conflict reaches the Rust host as its version can read it",
+  async () => {
+    // Against a v7 host this is the per-connection downgrade, end to end: the
+    // host said 7 in its hello, so the Conflict crossed as the Endpoint text
+    // a v7 kernel itself would send. Against a v8 host it crosses typed, and
+    // the host renders its own `conflict: …` without the endpoint wrapper.
+    await withDenoPeer(async (path) => {
+      const out = await runReplExpectingTrouble(["source urn:ts:clash"], {
+        target: `urn:ts:=${path}`,
+      });
+      assert(out.includes("conflict: square taken"), out);
+      if (RUST_WIRE_VERSION! < 8) {
+        assert(out.includes("endpoint error: conflict: square taken"), out);
+      } else {
+        assert(!out.includes("endpoint error"), out);
+      }
+    });
+  },
+);
+
 // -- direction 2: the Rust host serves, Deno connects ----------------------
 
 async function withRustServer(
@@ -258,7 +299,9 @@ async function withRustServer(
 fnIntegration("the Deno client drives the Rust kernel", async () => {
   await withRustServer(async (path) => {
     await using k = await connect(path);
-    assertStrictEquals(k.serverVersion, 7);
+    // The negotiated version: a v7 host is spoken to at v7 (this v8 client
+    // redialed saying 7), a v8 host at v8.
+    assertStrictEquals(k.serverVersion, RUST_WIRE_VERSION);
     const rep = await k.source("urn:iki:fn:toUpper", { in: "hi" });
     assertStrictEquals(rep.text, "HI");
     assert(rep.mediaType.startsWith("text/plain"), rep.mediaType);
@@ -397,7 +440,7 @@ mismatchIntegration(
 );
 
 mismatchIntegration(
-  "a v6 Rust host mounting this v7 peer errors naming both versions",
+  "a v6 Rust host mounting this peer errors naming both versions",
   async () => {
     await withDenoPeer(async (path) => {
       const out = await runReplExpectingTrouble(

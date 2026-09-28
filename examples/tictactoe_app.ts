@@ -67,6 +67,7 @@
 
 import { type Client, connect, ConnectionLost } from "../src/client.ts";
 import {
+  ConflictError,
   DeniedError,
   EndpointError,
   InvalidArgumentError,
@@ -279,6 +280,8 @@ export function rustDisplay(e: EndpointError): string {
     ? "timeout"
     : e instanceof UnavailableError
     ? "unavailable"
+    : e instanceof ConflictError
+    ? "conflict"
     : "endpoint error";
   return `${prefix}: ${e.message}`;
 }

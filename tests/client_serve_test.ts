@@ -84,7 +84,7 @@ async function withServer(fn: (path: string) => Promise<void>): Promise<void> {
 Deno.test("source round-trips with the hello on both sides", async () => {
   await withServer(async (path) => {
     await using k = await connect(path);
-    assertStrictEquals(k.serverVersion, 7);
+    assertStrictEquals(k.serverVersion, 8);
     const rep = await k.source("urn:ts:hello", { who: "Ada" });
     assertStrictEquals(rep.text, "Hello, Ada!");
     assertStrictEquals(rep.mediaType, "text/plain;charset=utf-8");

@@ -3,10 +3,10 @@
  *
  * v7 removed the version tolerances, so the integration suite must first
  * learn which wire version the installed `ikigai` binary speaks: full
- * two-directional integration runs against a v7 binary, and against an
- * older (v6) binary the suite instead asserts the CLEAN MISMATCH — the
- * hello names both versions, which is exactly the behavior the tolerance
- * removal promises.
+ * two-directional integration runs against a binary this package speaks
+ * (v7 or v8 — see {@linkcode speaksWireVersion}), and against an older (v6)
+ * binary the suite instead asserts the CLEAN MISMATCH — the hello names both
+ * versions, which is exactly the behavior the tolerance removal promises.
  *
  * There is a SECOND host-version axis, and it is the one no manifest can
  * hold: the resources this suite names live in `urn:iki:`, which arrived in
@@ -18,6 +18,18 @@
 
 import * as wire from "../src/wire.ts";
 import { FrameStream } from "../src/wire.ts";
+
+/**
+ * Whether this package speaks a host that answered the hello with
+ * `version` — anything from `MIN_PROTOCOL_VERSION` up to `PROTOCOL_VERSION`
+ * (v8 is backward compatible with v7). The gate every host-backed test uses:
+ * an equality check here would silently skip the whole suite against a v7
+ * host, which is exactly the host the v8 compatibility claim is about.
+ */
+export function speaksWireVersion(version: number | null): boolean {
+  return version !== null && version >= wire.MIN_PROTOCOL_VERSION &&
+    version <= wire.PROTOCOL_VERSION;
+}
 
 /** The installed binary, `~/.cargo/bin` first, then `PATH`; else null. */
 export function findIkigai(): string | null {
@@ -69,9 +81,10 @@ export async function spawnServe(
 
 /**
  * The wire version the installed binary's server declares in its hello —
- * probed with a raw hello frame (a mismatched server still ANSWERS before
- * closing; that is the point of the hello). `null` when no binary exists or
- * the probe fails outright.
+ * probed with a raw hello frame at OUR version (a mismatched server still
+ * ANSWERS before closing; that is the point of the hello, and a v7 server
+ * answers a v8 hello with 7, which is the version a v8 client then speaks
+ * to it). `null` when no binary exists or the probe fails outright.
  */
 export async function probeWireVersion(
   ikigai: string | null,

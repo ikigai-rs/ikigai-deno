@@ -6,22 +6,26 @@
  *
  * Skips cleanly when the `ikigai` binary is absent (CI has no Rust host;
  * these run locally against `~/.cargo/bin/ikigai`) — or when the installed
- * binary speaks an older wire version (v7 removed the tolerances; the clean
- * cross-version mismatch is asserted in `integration_test.ts`).
+ * binary speaks a wire version this package does not (older than v7; the
+ * clean cross-version mismatch is asserted in `integration_test.ts`).
  */
 
 import { assert, assertStrictEquals } from "@std/assert";
-import { PROTOCOL_VERSION } from "../src/wire.ts";
 import { createApp } from "../examples/hono_app.ts";
 import { withPeer } from "./examples_util.ts";
-import { findIkigai, probeWireVersion, spawnServe } from "./rust_host.ts";
+import {
+  findIkigai,
+  probeWireVersion,
+  spawnServe,
+  speaksWireVersion,
+} from "./rust_host.ts";
 
 const IKIGAI = findIkigai();
 const RUST_WIRE_VERSION = await probeWireVersion(IKIGAI);
 
 Deno.test({
   name: "an example app through the kernel gains MISS -> HIT caching",
-  ignore: IKIGAI === null || RUST_WIRE_VERSION !== PROTOCOL_VERSION,
+  ignore: IKIGAI === null || !speaksWireVersion(RUST_WIRE_VERSION),
   // The Rust CLI child and the in-process server cross test boundaries in
   // ways the strict sanitizers dislike; cleanup is explicit instead.
   sanitizeResources: false,
