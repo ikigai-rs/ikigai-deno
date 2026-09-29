@@ -33,6 +33,7 @@ import {
   type Args,
   compose,
   escapeHtml,
+  Game,
   handler,
   type Host,
   isIri,
@@ -44,6 +45,7 @@ import {
   type Route,
   route,
   rustDisplay,
+  trim,
 } from "../examples/tictactoe_app.ts";
 
 // ---------------------------------------------------------------------------
@@ -79,54 +81,154 @@ Deno.test("ttt app: the vendored htmx, ttt.css and host.css are the book's", asy
 
 /**
  * The README's world for its `template-cases` block (ikigai-tutorial
- * `crates/tic-tac-toe/README.md`, "The template language", at `89677bc`):
- * the resources the cases are filled over, and nothing else.
+ * `crates/tic-tac-toe/README.md`, "The template language", at `d995d90`):
+ * the resources the cases are filled over, two VIEWS bound as the game binds
+ * its own (a template at a name, composed with only the arguments its name
+ * captures and its marker passes — a captured one winning), and nothing else.
  */
-const WORLD: Resolve = (iri) => {
+const WORLD: Resolve = (iri, args) => {
   const fixed: Record<string, string> = {
     "urn:t:mark": `<b>"&'$a{urn:t:secret}`,
     "urn:t:html": "<i>ok</i>",
     "urn:t:dash": " -\n",
+    "urn:t:on": " On\n",
+    "urn:t:empty": "",
     "urn:t:inner": "[$h{{x}}]",
+    "urn:t:note": "($h{{message}})",
   };
+  const view = (template: string, captured: Args = {}) =>
+    compose(fixed[template], { ...args, ...captured }, WORLD);
+  const inner = /^urn:t:view:inner:(.+)$/.exec(iri);
+  if (inner) return view("urn:t:inner", { x: inner[1] });
+  if (iri === "urn:t:view:note") return view("urn:t:note");
   const cell = /^urn:t:cell:([^:]+):(.+)$/.exec(iri);
   if (cell) return Promise.resolve(`${cell[1]}.${cell[2]}`);
   if (iri in fixed) return Promise.resolve(fixed[iri]);
   return Promise.reject(new UnresolvedError(iri));
 };
 
+/**
+ * A case as the README writes it, with each `\u{…}` the code point it names,
+ * so a case can hold a character that does not show. No other `\` is special.
+ */
+function unescaped(text: string): string {
+  return text.replace(/\\u\{([^}]*)\}/g, (_, hex: string) => {
+    assert(/^[0-9A-Fa-f]+$/.test(hex), `hex digits: \\u{${hex}}`);
+    return String.fromCodePoint(parseInt(hex, 16));
+  });
+}
+
+/**
+ * Whether a refusal is compose's OWN (`malformed`: the template itself is
+ * refused, before anything at its level resolves) rather than a marker's
+ * request or argument failing (`failed`) — in Rust, `Error::Endpoint` whose
+ * message starts `compose:`.
+ */
+function malformed(e: unknown): boolean {
+  return e instanceof EndpointError && e.constructor === EndpointError &&
+    e.message.startsWith("compose:");
+}
+
 /** The README's arguments for every case. */
 const CASE_ARGS = { x: "1", y: "-2", message: "it's <b>" };
 
 Deno.test("ttt app: the template-language cases in the tutorial's README hold", async () => {
   // Copied verbatim from the README's block, and parsed as the tutorial's
-  // `tests/templates.rs` parses it: a kind, then (for `fill`) a tab.
+  // `tests/templates.rs` parses it: a kind, then the template, then (always
+  // for `fill`, optionally for `refuse`) a tab and what follows it — the
+  // filled text, or the refusal's class — each with its `\u{…}` decoded.
   const block = await Deno.readTextFile(
     new URL("./ttt_template_cases.txt", import.meta.url),
   );
   const lines = block.split("\n").filter((line) => line !== "");
-  assert(lines.length >= 20, `${lines.length} cases`);
+  assert(lines.length >= 38, `${lines.length} cases`);
   for (const line of lines) {
     const kind = ["fill", "refuse"].find((k) => line.startsWith(k));
     assert(kind !== undefined, `a case is fill or refuse: ${line}`);
-    const rest = line.slice(kind.length).trimStart();
+    const rest = line.slice(kind.length).replace(/^\p{White_Space}+/u, "");
+    const tab = rest.indexOf("\t");
+    const [template, after] = tab < 0
+      ? [unescaped(rest), null]
+      : [unescaped(rest.slice(0, tab)), unescaped(rest.slice(tab + 1))];
     if (kind === "fill") {
-      const tab = rest.indexOf("\t");
-      assert(tab >= 0, `a tab: ${line}`);
-      const [template, filled] = [rest.slice(0, tab), rest.slice(tab + 1)];
+      assert(after !== null, `a fill case has a tab: ${line}`);
       assertStrictEquals(
         await compose(template, CASE_ARGS, WORLD),
-        filled,
+        after,
         template,
       );
-    } else {
-      await assertRejects(
-        () => compose(rest, CASE_ARGS, WORLD),
-        EndpointError,
-        undefined,
-        rest,
+      continue;
+    }
+    assert(
+      after === null || after === "malformed" || after === "failed",
+      `a refusal's class is malformed or failed: ${line}`,
+    );
+    const error = await compose(template, CASE_ARGS, WORLD).then(
+      (filled) => {
+        throw new Error(`should be refused: ${template} gave ${filled}`);
+      },
+      (e: unknown) => e,
+    );
+    assert(error instanceof EndpointError, `${template}: ${error}`);
+    if (after !== null) {
+      assertStrictEquals(
+        malformed(error),
+        after === "malformed",
+        `${template}: ${after}, but ${error.constructor.name}: ${error.message}`,
       );
     }
+  }
+});
+
+Deno.test("ttt app: trimmed is Unicode White_Space, as Rust's str::trim — measured", () => {
+  // `char::is_whitespace`'s list (the White_Space property), from Rust's docs.
+  const rust = new Set([
+    ...[0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0x85, 0xa0, 0x1680],
+    ...Array.from({ length: 11 }, (_, n) => 0x2000 + n),
+    ...[0x2028, 0x2029, 0x202f, 0x205f, 0x3000],
+  ]);
+  assertStrictEquals(rust.size, 25);
+  const differ: string[] = [];
+  const js: number[] = [];
+  for (let cp = 0; cp <= 0x10ffff; cp++) {
+    if (cp >= 0xd800 && cp <= 0xdfff) continue;
+    const c = String.fromCodePoint(cp);
+    const text = `${c}a${c}`;
+    if ((trim(text) === "a") !== rust.has(cp)) differ.push(cp.toString(16));
+    if ((text.trim() === "a") !== rust.has(cp)) js.push(cp);
+  }
+  assertEquals(differ, []);
+  // Why `.trim()` is not the filler's: it strips U+FEFF and keeps U+0085.
+  assertEquals(js, [0x85, 0xfeff]);
+});
+
+Deno.test("ttt app: conditional without equals reads its test as a boolean", async () => {
+  const values: Record<string, string> = {
+    "urn:c": "",
+    "urn:t": "[then]",
+    "urn:e": "[else]",
+  };
+  const world: Resolve = (iri) => Promise.resolve(values[iri]);
+  const cond = (rest = "&else=urn:e") =>
+    `$a{urn:iki:fn:conditional?if=urn:c&then=urn:t${rest}}`;
+  for (const yes of ["true", " TRUE\n", "1", "Yes", "\u3000on\u0085"]) {
+    values["urn:c"] = yes;
+    assertStrictEquals(await compose(cond(), {}, world), "[then]", yes);
+  }
+  for (const no of ["false", "0", "NO", "off", "", " \n"]) {
+    values["urn:c"] = no;
+    assertStrictEquals(await compose(cond(), {}, world), "[else]", no);
+    assertStrictEquals(await compose(cond(""), {}, world), "", no);
+  }
+  // Not a boolean: refused, never a silent branch — and a U+FEFF is not
+  // trimmed away.
+  for (const bad of ["-", "X", "2", "truthy", "o n", "\ufeffon"]) {
+    values["urn:c"] = bad;
+    await assertRejects(
+      () => compose(cond(), {}, world),
+      EndpointError,
+      "not a boolean",
+    );
   }
 });
 
@@ -179,13 +281,22 @@ Deno.test("ttt app: conditional sources only the branch it takes", async () => {
   assertStrictEquals(await compose(cond("O"), {}, world), "[urn:e]");
   assertStrictEquals(await compose(cond("O", ""), {}, world), "");
   assertEquals(seen, ["urn:c", "urn:t", "urn:c", "urn:e", "urn:c"]);
-  // `if`, `equals` and `then` are required, whichever side would be taken.
-  for (const missing of ["if=urn:c&equals=X", "if=urn:c&then=urn:t"]) {
+  // `if` and `then` are required, whichever side would be taken — and
+  // before anything is sourced.
+  seen.length = 0;
+  for (
+    const missing of [
+      "if=urn:c&equals=X",
+      "if=urn:c&equals=O&else=urn:e",
+      "then=urn:t&equals=X",
+    ]
+  ) {
     await assertRejects(
       () => compose(`$a{urn:iki:fn:conditional?${missing}}`, {}, world),
       MissingArgumentError,
     );
   }
+  assertEquals(seen, []);
 });
 
 Deno.test("ttt app: a malformed marker fails the template before anything resolves", async () => {
@@ -489,6 +600,40 @@ Deno.test("ttt app: the views are composed here from the host's raw resources", 
     "/game/a/iki/tutorial/ttt/view/status",
   );
   assertStrictEquals(status, "O to play.");
+});
+
+Deno.test("ttt app: / reads the root game's plain names, /game/root/ its gateway names", async () => {
+  // Every name any request reads, answered for EITHER spelling of the root
+  // game: which spelling a page reads is the whole point.
+  const reads: string[] = [];
+  const host: Host = {
+    source(iri: string) {
+      reads.push(iri);
+      const name = iri.replace(/^urn:(?:game:root:)?iki:tutorial:ttt:/, "");
+      const text = name === "template:status" ? "$h{" + T + "turn}" : "X";
+      return Promise.resolve(new Representation(text, "text/html"));
+    },
+    sink: () => Promise.reject(new Error("no writes here")),
+    entries: () => Promise.resolve([]),
+  };
+  assertStrictEquals(new Game(host, null).iri("turn"), `${T}turn`);
+  assertStrictEquals(
+    new Game(host, "root").iri("turn"),
+    "urn:game:root:iki:tutorial:ttt:turn",
+  );
+  for (
+    const [path, prefix] of [
+      ["/iki/tutorial/ttt/view/status", T],
+      [
+        "/game/root/iki/tutorial/ttt/view/status",
+        "urn:game:root:" + T.slice(4),
+      ],
+    ]
+  ) {
+    reads.length = 0;
+    assertEquals((await call(host, "GET", path)).slice(0, 2), [200, "X"]);
+    assertEquals(reads, [`${prefix}template:status`, `${prefix}turn`], path);
+  }
 });
 
 Deno.test("ttt app: a hostile mark is escaped, and its marker is never expanded", async () => {
