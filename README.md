@@ -373,12 +373,15 @@ TypeScript on both ends of the game, with the Rust kernel in the middle:
   an IPC client and serves the playable board. It reads `template:*`,
   `cell:{x}:{y}`, `winner` and `turn` from the host and composes the views
   itself: `compose` implements the subset of the template language the templates
-  use (the tutorial README's "The template language", whose 20 fill-and-refuse
-  cases `tests/tictactoe_app_test.ts` runs), including `conditional`, which the
-  host's gateway does not forward; a five-row table says which template each
-  view (`view:board`, `view:square:{x}:{y}`, `view:status`, `view:reply`,
-  `view:game:{game}`) composes. Every play is a Sink through the host
-  (`move:{x}:{y}`, `reset`), then `view:reply`.
+  use (the tutorial README's "The template language", whose 38 fill-and-refuse
+  cases, copied verbatim to `tests/ttt_template_cases.txt`,
+  `tests/tictactoe_app_test.ts` runs), including `conditional` in both its
+  `equals` and boolean forms, which the host's gateway does not forward;
+  "trimmed" is Unicode `White_Space`, as Rust's `str::trim`, not JavaScript's
+  `.trim()`; a five-row table says which template each view (`view:board`,
+  `view:square:{x}:{y}`, `view:status`, `view:reply`, `view:game:{game}`)
+  composes. Every play is a Sink through the host (`move:{x}:{y}`, `reset`),
+  then `view:reply`.
 
 `ttt-host` (built from ikigai-tutorial's `crates/ttt-host`) holds the rules, the
 composites and the cache, and mounts the Deno store as game `ts`:

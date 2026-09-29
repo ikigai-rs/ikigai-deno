@@ -19,7 +19,8 @@
  *
  * The renderer is {@linkcode compose} — the subset of the template language
  * the templates use (`$a{…}`, `$r{…}`, `$h{…}`, `{x}` arguments, and
- * `urn:iki:fn:conditional`, which the host's gateway does not forward) — plus
+ * `urn:iki:fn:conditional` in both its forms, which the host's gateway does
+ * not forward), with "trimmed" meaning Unicode `White_Space` — plus
  * {@linkcode Game}'s table of views. It holds no rule about the game: which
  * square or status template shows is a `conditional` in the templates, over
  * `cell:{x}:{y}`, `winner` and `turn`. What it does NOT do is the interesting
@@ -52,8 +53,9 @@
  * Every name in a template is spelled for the root game. A game `id` is
  * reached as `urn:game:{id}:iki:tutorial:ttt:{name}`, the host's gateway
  * names, which carry the game as a VALUE the host turns into the game's
- * corridor; the root game is `urn:game:root:…`, and `/game/root/` is its page
- * as it is on the host.
+ * corridor. The root game has two spellings, as it has two pages: `/` uses
+ * its plain `urn:iki:tutorial:ttt:{name}` names, as `ttt-host`'s own `/` does,
+ * and `/game/root/` uses `urn:game:root:…`. The two answer the same.
  *
  * ⚠ **Write through the host, always.** The host cuts its cached reads when
  * ITS kernel issues the write; a write made behind its back (to a peer store
@@ -125,6 +127,21 @@ export function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (c) => ESCAPES[c]);
 }
 
+/**
+ * `text` trimmed as Rust's `str::trim` trims it: every character with the
+ * Unicode `White_Space` property removed from both ends. Not
+ * `String.prototype.trim()`, which also strips U+FEFF and keeps U+0085.
+ */
+export function trim(text: string): string {
+  // Every White_Space character is in the BMP, so a code unit is enough.
+  let [start, end] = [0, text.length];
+  while (start < end && WHITE_SPACE.test(text[start])) start++;
+  while (end > start && WHITE_SPACE.test(text[end - 1])) end--;
+  return text.slice(start, end);
+}
+
+const WHITE_SPACE = /^\p{White_Space}$/u;
+
 function refuse(body: string, detail: string): never {
   throw new EndpointError(`compose: marker \`${body}\`: ${detail}`);
 }
@@ -165,7 +182,7 @@ export function scan(text: string): Segment[] {
     }
     if (literal) out.push(literal);
     literal = "";
-    out.push({ mode: mode as Mode, body: text.slice(i + 3, end).trim() });
+    out.push({ mode: mode as Mode, body: trim(text.slice(i + 3, end)) });
     i = end;
   }
   if (literal) out.push(literal);
@@ -214,22 +231,22 @@ function parseMarker(mode: Mode, body: string): Marker {
     return { arg };
   }
   const q = body.indexOf("?");
-  const iri = (q < 0 ? body : body.slice(0, q)).trim();
+  const iri = trim(q < 0 ? body : body.slice(0, q));
   checkPlaceholders(body, iri);
   const args: [string, { text: string; quoted: boolean }][] = [];
   for (const raw of q < 0 ? [] : splitOutsideQuotes(body.slice(q + 1), "&")) {
-    const pair = raw.trim();
+    const pair = trim(raw);
     if (!pair) continue;
     const eq = pair.indexOf("=");
     if (eq < 0) refuse(body, `the argument \`${pair}\` is not key=value`);
-    const value = pair.slice(eq + 1).trim();
+    const value = trim(pair.slice(eq + 1));
     const quoted = value.length >= 2 && value.startsWith('"') &&
       value.endsWith('"');
     if (!quoted) checkPlaceholders(body, value);
     const text = quoted
       ? value.slice(1, -1).replace(/\\([\s\S]?)/g, (_, c) => c || "\\")
       : value;
-    args.push([pair.slice(0, eq).trim(), { text, quoted }]);
+    args.push([trim(pair.slice(0, eq)), { text, quoted }]);
   }
   return { iri, args };
 }
@@ -255,15 +272,36 @@ function fillArguments(text: string, args: Args, encode: boolean): string {
 }
 
 /**
- * `urn:iki:fn:conditional?if=A&equals=V&then=B&else=C`: source `A`, and
- * source ONLY `B` when its trimmed text is exactly `V`, else only `C` (nothing
- * when there is no `else`). The answer is the chosen template, unexpanded.
+ * `A`'s text as a boolean, as `ikigai-fn` reads one: trimmed and in ASCII
+ * lower case, `true`/`1`/`yes`/`on` or `false`/`0`/`no`/`off`/empty. Anything
+ * else is refused, so a malformed condition cannot silently mis-branch.
+ */
+function asBool(text: string, iri: string): boolean {
+  const s = trim(text).replace(/[A-Z]/g, (c) => c.toLowerCase());
+  if (["true", "1", "yes", "on"].includes(s)) return true;
+  if (["false", "0", "no", "off", ""].includes(s)) return false;
+  throw new EndpointError(
+    `conditional: \`${iri}\` returned ${
+      JSON.stringify(s)
+    }, not a boolean (true/false/1/0/yes/no)`,
+  );
+}
+
+/**
+ * `urn:iki:fn:conditional?if=A&then=B&else=C`, optionally with `&equals=V`:
+ * source `A`; with `equals` the test is whether its trimmed text is exactly
+ * `V`, without it `A` is a boolean ({@linkcode asBool}). Source ONLY `B` when
+ * the test holds, else only `C` (nothing when there is no `else`). The
+ * contract is held before anything is sourced: `if` and `then` are required
+ * whichever side is taken. The answer is the chosen template, unexpanded.
  */
 async function conditional(args: Args, resolve: Resolve): Promise<string> {
-  const [test, equals, then] = ["if", "equals", "then"].map((name) =>
-    argument(args, name)
-  );
-  if ((await resolve(test, {})).trim() === equals) return resolve(then, {});
+  const [test, then] = [argument(args, "if"), argument(args, "then")];
+  const verdict = await resolve(test, {});
+  const taken = Object.hasOwn(args, "equals")
+    ? trim(verdict) === args.equals
+    : asBool(verdict, test);
+  if (taken) return resolve(then, {});
   return Object.hasOwn(args, "else") ? resolve(args.else, {}) : "";
 }
 
@@ -337,9 +375,17 @@ const VIEWS: [RegExp, string, string[]][] = [
 export class Game {
   constructor(readonly client: Host, readonly id: string | null) {}
 
-  /** The host's gateway name for the game's resource `name` (e.g. `cell:1:1`). */
+  /**
+   * The host's name for the game's resource `name` (e.g. `cell:1:1`): the
+   * gateway name `urn:game:{id}:iki:tutorial:ttt:{name}` for a game `id`
+   * (`root` included, for `/game/root/`), and the plain
+   * `urn:iki:tutorial:ttt:{name}` for the root game at `/`, as `ttt-host`'s
+   * own `/` spells it.
+   */
   iri(name: string): string {
-    return `urn:game:${this.id ?? "root"}:iki:tutorial:ttt:${name}`;
+    return this.id === null
+      ? `${GAME}${name}`
+      : `urn:game:${this.id}:iki:tutorial:ttt:${name}`;
   }
 
   /** Sink `name` in this game — the write the host's kernel cuts from. */
