@@ -1,35 +1,46 @@
 /**
- * The tic-tac-toe app (`examples/tictactoe_app.ts`): its template filler, its
- * path rule and its routes against a stand-in host — and then THE PARITY
- * TEST, against a real `ttt-host`: for a sequence of states (empty, moves, a
- * win, a draw, refusals), the bytes the app fills in TypeScript equal the
- * bytes the Rust views fill for the same game, fetched over IPC. If they
- * differ, the TypeScript filler is wrong, not the template.
+ * The tic-tac-toe app (`examples/tictactoe_app.ts`): its template-language
+ * filler (the tutorial README's cases, copied), its path rule and its routes
+ * against a stand-in host — and then THE PARITY TEST, against a real
+ * `ttt-host`: for a sequence of states (empty, moves, a win, a draw,
+ * refusals, a hostile mark), the bytes the app composes in TypeScript equal
+ * the bytes the Rust views compose for the same game, fetched over IPC. If
+ * they differ, the TypeScript filler is wrong, not the template.
  *
  * The host half skips when no `ttt-host` binary is found (CI has no Rust
  * host): `$TTT_HOST`, then `~/.local/ttt-host/bin/ttt-host`, then `PATH`.
  */
 
-import { assert, assertEquals, assertStrictEquals } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStrictEquals,
+  assertThrows,
+} from "@std/assert";
 import { connect } from "../src/client.ts";
 import {
   ConflictError,
   EndpointError,
   InvalidArgumentError,
+  MissingArgumentError,
   NotFoundError,
   Representation,
   type SpaceEntry,
   UnresolvedError,
 } from "../src/wire.ts";
 import {
-  decodePath,
+  type Args,
+  compose,
   escapeHtml,
-  fill,
   handler,
   type Host,
   isIri,
   PAGE_CSP,
   parseArgs,
+  PathError,
+  pathSegments,
+  type Resolve,
   type Route,
   route,
   rustDisplay,
@@ -63,57 +74,158 @@ Deno.test("ttt app: the vendored htmx, ttt.css and host.css are the book's", asy
 });
 
 // ---------------------------------------------------------------------------
-// The template format
+// The template language
 // ---------------------------------------------------------------------------
 
-Deno.test("ttt app: text is escaped, HTML is not", () => {
-  assertStrictEquals(escapeHtml(`a&b<c>"d'e`), "a&amp;b&lt;c&gt;&quot;d&#39;e");
-  const out = fill(
-    `<b title="{{t}}">{{t}}</b>{{h}}`,
-    ({ name }) => name === "t" ? { text: `<"x">` } : { html: "<i>raw</i>" },
+/**
+ * The README's world for its `template-cases` block (ikigai-tutorial
+ * `crates/tic-tac-toe/README.md`, "The template language", at `89677bc`):
+ * the resources the cases are filled over, and nothing else.
+ */
+const WORLD: Resolve = (iri) => {
+  const fixed: Record<string, string> = {
+    "urn:t:mark": `<b>"&'$a{urn:t:secret}`,
+    "urn:t:html": "<i>ok</i>",
+    "urn:t:dash": " -\n",
+    "urn:t:inner": "[$h{{x}}]",
+  };
+  const cell = /^urn:t:cell:([^:]+):(.+)$/.exec(iri);
+  if (cell) return Promise.resolve(`${cell[1]}.${cell[2]}`);
+  if (iri in fixed) return Promise.resolve(fixed[iri]);
+  return Promise.reject(new UnresolvedError(iri));
+};
+
+/** The README's arguments for every case. */
+const CASE_ARGS = { x: "1", y: "-2", message: "it's <b>" };
+
+Deno.test("ttt app: the template-language cases in the tutorial's README hold", async () => {
+  // Copied verbatim from the README's block, and parsed as the tutorial's
+  // `tests/templates.rs` parses it: a kind, then (for `fill`) a tab.
+  const block = await Deno.readTextFile(
+    new URL("./ttt_template_cases.txt", import.meta.url),
   );
+  const lines = block.split("\n").filter((line) => line !== "");
+  assert(lines.length >= 20, `${lines.length} cases`);
+  for (const line of lines) {
+    const kind = ["fill", "refuse"].find((k) => line.startsWith(k));
+    assert(kind !== undefined, `a case is fill or refuse: ${line}`);
+    const rest = line.slice(kind.length).trimStart();
+    if (kind === "fill") {
+      const tab = rest.indexOf("\t");
+      assert(tab >= 0, `a tab: ${line}`);
+      const [template, filled] = [rest.slice(0, tab), rest.slice(tab + 1)];
+      assertStrictEquals(
+        await compose(template, CASE_ARGS, WORLD),
+        filled,
+        template,
+      );
+    } else {
+      await assertRejects(
+        () => compose(rest, CASE_ARGS, WORLD),
+        EndpointError,
+        undefined,
+        rest,
+      );
+    }
+  }
+});
+
+Deno.test("ttt app: $h escapes exactly & < > \" ' — ' as &#39;", () => {
   assertStrictEquals(
-    out,
-    `<b title="&lt;&quot;x&quot;&gt;">&lt;&quot;x&quot;&gt;</b><i>raw</i>`,
+    escapeHtml(`a&b<c>"d'e$`),
+    "a&amp;b&lt;c&gt;&quot;d&#39;e$",
   );
 });
 
-Deno.test("ttt app: an apostrophe is &#39;, the Rust filler's escape", () => {
-  assertStrictEquals(escapeHtml("'"), "&#39;");
-  assertStrictEquals(
-    fill(`<b title='{{t}}'>{{t}}</b>`, () => ({ text: "it's" })),
-    "<b title='it&#39;s'>it&#39;s</b>",
+Deno.test("ttt app: a marker's IRI takes its arguments percent-encoded, a value verbatim", async () => {
+  const seen: [string, Args][] = [];
+  const record: Resolve = (iri, args) => {
+    seen.push([iri, args]);
+    return Promise.resolve("");
+  };
+  await compose(
+    `$r{urn:x:{v}?k={v}&q="{v}"&e= a b }`,
+    { v: "a b/é:~" },
+    record,
   );
+  assertEquals(seen, [[
+    "urn:x:a%20b%2F%C3%A9%3A~",
+    { k: "a b/é:~", q: "{v}", e: "a b" },
+  ]]);
 });
 
-Deno.test("ttt app: a slot's arguments arrive in their plain spelling", () => {
-  const seen: string[][] = [];
-  fill("{{square 0 -2}}{{status}}", ({ args }) => {
+Deno.test('ttt app: a quoted value keeps its & and }, and unescapes \\" and \\\\', async () => {
+  const seen: Args[] = [];
+  const record: Resolve = (_, args) => {
     seen.push(args);
-    return { text: "" };
-  });
-  assertEquals(seen, [["0", "-2"], []]);
+    return Promise.resolve("");
+  };
+  assertStrictEquals(
+    await compose(`<$r{urn:x?a="1&2}"&b="q\\"\\\\"}>`, {}, record),
+    "<>",
+  );
+  assertEquals(seen, [{ a: "1&2}", b: `q"\\` }]);
 });
 
-Deno.test("ttt app: any other `{{` is refused, never passed through", () => {
+Deno.test("ttt app: conditional sources only the branch it takes", async () => {
+  const seen: string[] = [];
+  const world: Resolve = (iri) => {
+    seen.push(iri);
+    return Promise.resolve(iri === "urn:c" ? " X\n" : `[${iri}]`);
+  };
+  const cond = (equals: string, rest = "&else=urn:e") =>
+    `$a{urn:iki:fn:conditional?if=urn:c&equals=${equals}&then=urn:t${rest}}`;
+  assertStrictEquals(await compose(cond("X"), {}, world), "[urn:t]");
+  assertStrictEquals(await compose(cond("O"), {}, world), "[urn:e]");
+  assertStrictEquals(await compose(cond("O", ""), {}, world), "");
+  assertEquals(seen, ["urn:c", "urn:t", "urn:c", "urn:e", "urn:c"]);
+  // `if`, `equals` and `then` are required, whichever side would be taken.
+  for (const missing of ["if=urn:c&equals=X", "if=urn:c&then=urn:t"]) {
+    await assertRejects(
+      () => compose(`$a{urn:iki:fn:conditional?${missing}}`, {}, world),
+      MissingArgumentError,
+    );
+  }
+});
+
+Deno.test("ttt app: a malformed marker fails the template before anything resolves", async () => {
+  const seen: string[] = [];
+  const world: Resolve = (iri) => {
+    seen.push(iri);
+    return Promise.resolve("");
+  };
   for (
     const bad of [
-      "{{square 01 0}}",
-      "{{square -0 0}}",
-      "{{square +1 0}}",
-      "{{Square 0 0}}",
-      "{{square  0}}",
-      "an unclosed {{slot",
+      "$r{urn:ok}$h{}",
+      "$r{urn:ok}$a{{x}}",
+      "$r{urn:ok}$h{urn:a || urn:b}",
+      "$r{urn:ok}$h{urn:{x y}}",
+      "$r{urn:ok}$h{urn:a?k}",
+      "$r{urn:ok}$h{urn:a?k={x}{}}",
     ]
   ) {
-    let caught: unknown = null;
-    try {
-      fill(bad, () => ({ text: "" }));
-    } catch (e) {
-      caught = e;
-    }
-    assert(caught instanceof EndpointError, bad);
+    await assertRejects(() => compose(bad, { x: "1" }, world), EndpointError);
   }
+  assertEquals(seen, []);
+  // A `||` inside a quoted value is a value, not a fallback.
+  assertStrictEquals(await compose(`$r{urn:a?k="||"}`, {}, world), "");
+});
+
+Deno.test("ttt app: $a expands with the same arguments, and a value is never rescanned", async () => {
+  const world: Resolve = (iri) =>
+    Promise.resolve(
+      iri === "urn:outer" ? "($a{urn:inner})" : "<$h{{x}}|$r{{x}}>",
+    );
+  assertStrictEquals(
+    await compose("$a{urn:outer}", { x: `$a{urn:outer}&` }, world),
+    "(<$a{urn:outer}&amp;|$a{urn:outer}&>)",
+  );
+  const loop: Resolve = () => Promise.resolve("$a{urn:loop}");
+  await assertRejects(
+    () => compose("$a{urn:loop}", {}, loop),
+    EndpointError,
+    "recursion limit (32)",
+  );
 });
 
 Deno.test("ttt app: a refusal reads as the Rust kernel's Display prints it", () => {
@@ -201,15 +313,22 @@ Deno.test("ttt app: the game is where the page is; a/b/c is urn:a:b:c", () => {
 });
 
 Deno.test("ttt app: a path is decoded as ttt-host's edge decodes it", () => {
-  assertStrictEquals(decodePath("/game/a%41/"), "/game/aA/");
-  assertStrictEquals(decodePath("/a%20b"), "/a b");
-  assertStrictEquals(decodePath("/game/a%41"), "/game/aA");
-  assertStrictEquals(decodePath("/%zz/"), "/%zz/");
-  assertStrictEquals(decodePath("/game/a%4"), "/game/a%4");
-  // The reference's quirks, copied: `+` is a space in a path too, and Rust's
-  // hex parse takes a leading `+`, so `%+1` is byte 1.
-  assertStrictEquals(decodePath("/play/+1/0"), "/play/ 1/0");
-  assertStrictEquals(decodePath("/a%+1"), "/a\u0001");
+  assertEquals(pathSegments("/game/a%41/"), ["game", "aA"]);
+  assertEquals(pathSegments("//a%20b//"), ["a b"]);
+  // Split first, then decode: an encoded slash is data inside its segment.
+  assertEquals(pathSegments("/game/a%2Fb/x"), ["game", "a/b", "x"]);
+  assertEquals(pathSegments("/a%25%2f"), ["a%/"]);
+  // `+` is a literal `+` in a path; only a query is form-encoded.
+  assertEquals(pathSegments("/play/+1/0"), ["play", "+1", "0"]);
+  assertEquals(pathSegments("/caf%C3%A9"), ["caf\u00e9"]);
+  for (const bad of ["/%zz/", "/game/a%4", "/a%", "/a%+1", "/a%4g"]) {
+    assertThrows(
+      () => pathSegments(bad),
+      PathError,
+      "malformed percent-escape",
+    );
+  }
+  assertThrows(() => pathSegments("/%E9"), PathError, "not UTF-8 once decoded");
 });
 
 Deno.test("ttt app: a path that is not an IRI is refused before anything resolves", () => {
@@ -258,24 +377,35 @@ Deno.test("ttt app: --socket and --http, as ttt-host spells them", () => {
 // The routes, against a stand-in host (no Rust needed)
 // ---------------------------------------------------------------------------
 
-/** A host with one game, `a`, whose templates are small stand-ins. */
-function standIn(): Host & { writes: string[] } {
+/** The name a stand-in template spells, for the root game (as the real ones are). */
+const T = "urn:iki:tutorial:ttt:";
+
+/**
+ * A host with one game, `a`, whose templates are small stand-ins in the
+ * template language, with the real templates' shape: a board of square
+ * views, each choosing its template by a `conditional` over its cell.
+ */
+function standIn(): Host & { writes: string[]; reads: string[] } {
+  const choose = (test: string, then: string, otherwise: string) =>
+    `$a{urn:iki:fn:conditional?if=${T}${test}&equals=-&then=${T}template:${then}&else=${T}template:${otherwise}}`;
   const resources: Record<string, string> = {
-    "template:game": `<section aria-label="Game {{game}}"></section>`,
-    "template:board": "{{square 0 0}}|{{square 1 0}}",
-    "template:square-open": `<o id="{{x}}-{{y}}"></o>`,
-    "template:square-taken": `<t>{{mark}}</t>`,
-    "template:square-closed": `<c></c>`,
-    "template:status-turn": "{{mark}} to play.",
-    "template:status-won": "{{mark}} has won.",
-    "template:status-draw": "A draw.",
-    "template:reply": "{{message}}. {{status}}",
+    "template:game": `<section aria-label="Game $h{{game}}"></section>`,
+    "template:board":
+      `$r{${T}view:square:0:0}|$r{${T}view:square:1:0}|$r{${T}view:square:0:0}`,
+    "template:square": choose("cell:{x}:{y}", "square-open", "square-taken"),
+    "template:square-open": `<o id="$h{{x}}-$h{{y}}"></o>`,
+    "template:square-taken": `<t>$h{${T}cell:{x}:{y}}</t>`,
+    "template:status": choose("winner", "status-turn", "status-won"),
+    "template:status-turn": `$h{${T}turn} to play.`,
+    "template:status-won": `$h{${T}winner} has won.`,
+    "template:reply": `$h{{message}}. $r{${T}view:status}`,
     "winner": "-",
     "turn": "O",
     "cell:0:0": "X",
     "cell:1:0": "-",
   };
   const writes: string[] = [];
+  const reads: string[] = [];
   const game = "urn:game:a:iki:tutorial:ttt:";
   const named = (iri: string) => {
     if (!iri.startsWith(game)) throw new UnresolvedError(iri);
@@ -283,14 +413,21 @@ function standIn(): Host & { writes: string[] } {
   };
   return {
     writes,
+    reads,
     source(iri: string) {
-      const text = resources[named(iri)];
+      const name = named(iri);
+      reads.push(name);
+      const text = resources[name];
       if (text === undefined) throw new NotFoundError(`no ${iri}`);
       return Promise.resolve(new Representation(text, "text/html"));
     },
-    sink(iri: string) {
+    sink(iri: string, value?: string | Uint8Array) {
       const name = named(iri);
       writes.push(name);
+      if (name.startsWith("stored:")) {
+        resources[`cell:${name.slice("stored:".length)}`] = String(value);
+        return Promise.resolve(new Representation("ok"));
+      }
       if (name === "move:0:0") {
         throw new InvalidArgumentError("x, y", "0,0 is taken — X played there");
       }
@@ -316,7 +453,7 @@ async function call(
   return [response.status, await response.text(), response.headers];
 }
 
-Deno.test("ttt app: the page fills template:game under a <base> at the game", async () => {
+Deno.test("ttt app: the page composes view:game under a <base> at the game", async () => {
   const [code, body, headers] = await call(standIn(), "GET", "/game/a/");
   assertStrictEquals(code, 200);
   assert(body.includes(`<base href="/game/a/">`));
@@ -325,7 +462,7 @@ Deno.test("ttt app: the page fills template:game under a <base> at the game", as
   assertStrictEquals(headers.get("content-security-policy"), PAGE_CSP);
 });
 
-Deno.test("ttt app: the views are filled from the host's raw resources", async () => {
+Deno.test("ttt app: the views are composed here from the host's raw resources", async () => {
   const host = standIn();
   const [code, board] = await call(
     host,
@@ -333,13 +470,43 @@ Deno.test("ttt app: the views are filled from the host's raw resources", async (
     "/game/a/iki/tutorial/ttt/view/board",
   );
   assertStrictEquals(code, 200);
-  assertStrictEquals(board, `<t>X</t>|<o id="1-0"></o>`);
+  assertStrictEquals(board, `<t>X</t>|<o id="1-0"></o>|<t>X</t>`);
+  // Only the branch each conditional takes is read: no square-open for 0,0,
+  // no square-taken for 1,0, and never the status templates.
+  const templates = host.reads.filter((r) => r.startsWith("template:"));
+  assertEquals(templates, [
+    "template:board",
+    "template:square",
+    "template:square",
+    "template:square",
+    "template:square-taken",
+    "template:square-open",
+    "template:square-taken",
+  ]);
   const [, status] = await call(
     host,
     "GET",
     "/game/a/iki/tutorial/ttt/view/status",
   );
   assertStrictEquals(status, "O to play.");
+});
+
+Deno.test("ttt app: a hostile mark is escaped, and its marker is never expanded", async () => {
+  const host = standIn();
+  const hostile = `<b>"&'$a{${T}template:game}`;
+  await host.sink("urn:game:a:iki:tutorial:ttt:stored:0:0", hostile);
+  host.reads.length = 0;
+  const [, board] = await call(
+    host,
+    "GET",
+    "/game/a/iki/tutorial/ttt/view/board",
+  );
+  const escaped = `&lt;b&gt;&quot;&amp;&#39;$a{${T}template:game}`;
+  assertStrictEquals(
+    board,
+    `<t>${escaped}</t>|<o id="1-0"></o>|<t>${escaped}</t>`,
+  );
+  assert(!host.reads.includes("template:game"), host.reads.join(" "));
 });
 
 Deno.test("ttt app: a play is a Sink through the host, a refusal is answered", async () => {
@@ -403,7 +570,14 @@ Deno.test("ttt app: wrong verbs, bad coordinates and unknown games are refused",
       400,
       "invalid argument `x`: `01` is not an integer in its plain form (e.g. 0, 2, -1)",
     ],
-    ["POST", `/game/a/${view}/play/+1/0`, 400, "not a resource path"],
+    [
+      "POST",
+      `/game/a/${view}/play/+1/0`,
+      400,
+      "invalid argument `x`: `+1` is not an integer in its plain form (e.g. 0, 2, -1)",
+    ],
+    ["POST", `/game/a/${view}/play/%+1/0`, 400, "malformed percent-escape"],
+    ["GET", "/game/%E9/", 400, "not UTF-8 once decoded"],
     [
       "GET",
       `/game/zz/${view}/board`,
@@ -450,7 +624,7 @@ const VIEWS = "iki/tutorial/ttt/view";
 
 /**
  * The edge cases the parity test asks both faces, measured on `ttt-host`
- * (tutorial `31daf4e`). None of them moves a game: they run once game `a` is
+ * (tutorial `31daf4e`; `/game/root/` since `89677bc`). None of them moves a game: they run once game `a` is
  * over, so a play is refused, and no reset is among them.
  */
 const EDGES: [string, string][] = [
@@ -464,6 +638,10 @@ const EDGES: [string, string][] = [
   ["GET", "/game/a%41/"],
   ["GET", "/game/a%20b/"],
   ["GET", "/game/a%4"],
+  ["GET", "/game/a%+1/"],
+  ["GET", "/game/%E9/"],
+  ["GET", "/game/caf%C3%A9/"],
+  ["GET", "/game/a%2Fb/"],
   ["HEAD", "/game/a/"],
   ["HEAD", "/game/zz/"],
   ["POST", "/"],
@@ -477,6 +655,12 @@ const EDGES: [string, string][] = [
   ["OPTIONS", "/game/a/"],
   ["OPTIONS", "/game/zz/"],
   ["FOO", "/game/a/"],
+  // The root game's gateway spelling is a page and a game like any other.
+  ["GET", "/game/root/"],
+  ["GET", "/game/root"],
+  ["GET", `/game/root/${VIEWS}/status`],
+  ["POST", `/game/root/${VIEWS}/play/01/0`],
+  ["GET", `/game/root/${VIEWS}/play/1/1`],
   // A play: a coordinate not in its plain form, and each method.
   ["POST", `/game/a/${VIEWS}/play/01/0`],
   ["POST", `/game/a/${VIEWS}/play/-0/0`],
@@ -487,6 +671,8 @@ const EDGES: [string, string][] = [
   ["POST", `/game/a/${VIEWS}/play/99999999999999999999/0`],
   ["POST", `/game/a/${VIEWS}/play/1/2/3`],
   ["POST", `/game/a/${VIEWS}/play/a%20b/0`],
+  ["POST", `/game/a/${VIEWS}/play/1%2F1/0`],
+  ["POST", `/game/a/${VIEWS}/play/1/0%3A1`],
   ["POST", `/game/a/${VIEWS}/play/3/1`],
   ["PUT", `/game/a/${VIEWS}/play/1/1`],
   ["POST", `/game/a/${VIEWS}/play/1/1/`],
@@ -536,6 +722,10 @@ const NOT_VIEWS = [
   "/game/a/iki/tutorial/ttt/view/nothing",
   "/game/a/iki/tutorial/ttt/view/play/1",
   "/static/nothing.css",
+  "/static%2Fttt.css",
+  // A `/` inside a segment is data: `a/iki` is no game, and what follows no view.
+  "/game/a%2Fiki/tutorial/ttt/view/board",
+  "/static/x%2Fttt.css",
   "/favicon.ico",
   "/game",
 ];
@@ -740,12 +930,37 @@ Deno.test({
         await get(appUrl, `/${views}/board`),
         (await client.source("urn:iki:tutorial:ttt:view:board")).text,
       );
+      // A hostile mark, written to the root game's store THROUGH the host (the
+      // IPC face serves `stored:`), so the host cuts what reads it: escaped
+      // by `$h` in both faces, and its marker never expanded.
+      const hostile = `<b>"&'$a{urn:iki:tutorial:ttt:template:game}`;
+      await client.sink("urn:iki:tutorial:ttt:stored:1:1", hostile);
+      const escaped =
+        "&lt;b&gt;&quot;&amp;&#39;$a{urn:iki:tutorial:ttt:template:game}";
+      for (const path of [`/${views}/board`, `/game/root/${views}/board`]) {
+        const board = await get(appUrl, path);
+        assertStrictEquals(
+          board,
+          (await client.source("urn:iki:tutorial:ttt:view:board")).text,
+          `hostile: ${path}`,
+        );
+        assert(board.includes(`>${escaped}</button>`), board);
+        assert(!board.includes("ttt-game"), board);
+      }
+      for (const path of [`/${views}/status`, `/game/root/${views}/status`]) {
+        assertStrictEquals(
+          await get(appUrl, path),
+          (await client.source("urn:iki:tutorial:ttt:view:status")).text,
+          `hostile: ${path}`,
+        );
+      }
       // The page and its files are ttt-host's, byte for byte.
       for (
         const path of [
           "/",
           "/game/a/",
           "/game/b",
+          "/game/root/",
           "/static/htmx-2.0.4.min.js",
           "/static/ttt.css",
           "/static/host.css",
