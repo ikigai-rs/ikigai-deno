@@ -360,20 +360,25 @@ and counts the reads that reached Deno.
 ## Tic-tac-toe, all in TypeScript except the middle
 
 The ikigai book's tic-tac-toe (ikigai-tutorial, `crates/tic-tac-toe`) ships its
-HTML as **template resources** — `template:board`, `template:square-open`, … —
-with `{{slot}}` holes and no loops or conditions, so that any language can fill
-them. Two examples here put TypeScript on both ends of the game, with the Rust
-kernel in the middle:
+HTML as **template resources** — `template:board`, `template:square`, … —
+written in `ikigai-fn`'s template language (`$h{…}`, `$r{…}` and `$a{…}` markers
+with `{x}` arguments; which template shows is a `urn:iki:fn:conditional` inside
+the templates), so that any language can fill them. Two examples here put
+TypeScript on both ends of the game, with the Rust kernel in the middle:
 
 - [`examples/tictactoe_store.ts`](examples/tictactoe_store.ts) — the game's
   STATE: the stored cell, served from Deno (above).
 - [`examples/tictactoe_app.ts`](examples/tictactoe_app.ts) — the game's
   RENDERING: a zero-dependency `Deno.serve` app that connects to `ttt-host` as
   an IPC client and serves the playable board. It reads `template:*`,
-  `cell:{x}:{y}`, `winner` and `turn` from the host and fills the templates
-  itself — about a hundred lines, half of them refusing the malformed slots the
-  Rust filler refuses — and every play is a Sink through the host
-  (`move:{x}:{y}`, `reset`).
+  `cell:{x}:{y}`, `winner` and `turn` from the host and composes the views
+  itself: `compose` implements the subset of the template language the templates
+  use (the tutorial README's "The template language", whose 20 fill-and-refuse
+  cases `tests/tictactoe_app_test.ts` runs), including `conditional`, which the
+  host's gateway does not forward; a five-row table says which template each
+  view (`view:board`, `view:square:{x}:{y}`, `view:status`, `view:reply`,
+  `view:game:{game}`) composes. Every play is a Sink through the host
+  (`move:{x}:{y}`, `reset`), then `view:reply`.
 
 `ttt-host` (built from ikigai-tutorial's `crates/ttt-host`) holds the rules, the
 composites and the cache, and mounts the Deno store as game `ts`:
@@ -388,27 +393,30 @@ deno run -A examples/tictactoe_app.ts --socket /tmp/ttt-host.sock   # :8071
 Game state in TypeScript, rendering in TypeScript, and the Rust kernel in the
 middle doing resolution, composition, caching and invalidation: a move cuts one
 stored cell, and only what reads through it recomputes. `ttt-host` serves the
-same game on its own HTTP face (`:8070`), filled by its Rust views, and the two
-pages are the same bytes. `tests/tictactoe_app_test.ts` proves that: for an
-empty board, a won game, a drawn game and four refusals on the way, the app's
-`view/board`, `view/status` and every play's reply equal the Rust views' bytes
-over IPC, and the page and its three static files equal `ttt-host`'s. (It skips
-when no `ttt-host` is found: `$TTT_HOST`, `~/.local/ttt-host/bin/ttt-host`, then
-`PATH`.)
+same game on its own HTTP face (`:8070`), composed by its Rust views, and the
+two pages are the same bytes. `tests/tictactoe_app_test.ts` proves that: for an
+empty board, a won game, a drawn game, four refusals on the way and a hostile
+mark (`<b>"&'$a{…}`, written to the store through the host, escaped and never
+expanded), the app's `view/board`, `view/status` and every play's reply equal
+the Rust views' bytes over IPC, and the pages and their three static files equal
+`ttt-host`'s. (It skips when no `ttt-host` is found: `$TTT_HOST`,
+`~/.local/ttt-host/bin/ttt-host`, then `PATH`.)
 
 The app also answers every page and view path the way `ttt-host` does, refusals
 included: the same status and the same body for a coordinate not in its plain
 form (`400`), a game the host does not serve (`404`), a method a view does not
 take (`405`, with the host's `Allow` list), `/game/a` with or without its
-trailing slash, and a path that is not an IRI (`400 not a resource path`). The
-parity test asks both faces some sixty such requests and compares the answers.
-Two deliberate differences: a path that is not a view (`board`, `stored:…`,
-`template:…`) is `404 not found`, because the app serves views and is not a
-proxy for the host's raw resources; and a `PATCH` is always `415`, which the
-host also answers unless the body is a JSON merge-patch, a format the app does
-not model. The flags are the host's spelling, `--socket <path>` and
-`--http <addr>` (default `127.0.0.1:8071`; the host takes 8070 and the Python
-face 8072, so all three run at once).
+trailing slash, the root game as `/game/root/`, a path that is not an IRI
+(`400 not a resource path`), and a malformed percent-escape or a segment that is
+not UTF-8 (`400`, decoded per segment as `ikigai-web` 0.1.30 does, so `%2F` is
+data and `+` is a `+`). The parity test asks both faces some seventy such
+requests and compares the answers. Two deliberate differences: a path that is
+not a view (`board`, `stored:…`, `template:…`) is `404 not found`, because the
+app serves views and is not a proxy for the host's raw resources; and a `PATCH`
+is always `415`, which the host also answers unless the body is a JSON
+merge-patch, a format the app does not model. The flags are the host's spelling,
+`--socket <path>` and `--http <addr>` (default `127.0.0.1:8071`; the host takes
+8070 and the Python face 8072, so all three run at once).
 
 Two honest limits. **Always write through the host**: the host cuts its cached
 reads when ITS kernel issues the write, so a mark written to the store directly

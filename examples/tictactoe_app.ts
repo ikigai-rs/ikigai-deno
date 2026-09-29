@@ -4,10 +4,12 @@
  *
  * The ikigai book's applied chapter (ikigai-tutorial, `crates/tic-tac-toe`)
  * builds tic-tac-toe as resources and ships its HTML as TEMPLATE resources
- * (`template:{name}`), so that any host in any language can fill them. The
- * Rust kernel fills them itself (`view:board`, `view:status`); this app fills
- * them HERE, in TypeScript, from the raw resources a `ttt-host` serves over
- * its IPC socket:
+ * (`template:{name}`) written in `ikigai-fn`'s template language, so that any
+ * host in any language can fill them. The Rust kernel binds each view that
+ * reads as a template at a name (`view:board`, `view:square:{x}:{y}`,
+ * `view:status`, `view:reply`, `view:game:{game}`); this app composes those
+ * same views HERE, in TypeScript, from the raw resources a `ttt-host` serves
+ * over its IPC socket:
  *
  * ```sh
  * ttt-host --socket /tmp/ttt-host.sock                  # games a and b, :8070
@@ -15,27 +17,29 @@
  * open http://127.0.0.1:8071/game/a/
  * ```
  *
- * The renderer is {@linkcode fill} plus {@linkcode viewBoard},
- * {@linkcode viewStatus} and {@linkcode reply} — about a hundred lines of code
- * over `template:*`, `cell:{x}:{y}`, `winner` and `turn`, half of it refusing
- * the malformed slots the Rust filler refuses. What it does NOT do is the interesting part. It
- * computes nothing about the game: the winner, whose turn it is, whether a
- * move is legal — each is a resource the host resolves. And it caches
- * nothing: every read goes to the host, and the HOST's kernel answers from
- * its cache, recomputing only what a move cut (a move cuts one stored cell,
- * and the lines, winner and turn through it recompute; the templates never
- * do). The app is a view over resources, and the kernel does the rest.
+ * The renderer is {@linkcode compose} — the subset of the template language
+ * the templates use (`$a{…}`, `$r{…}`, `$h{…}`, `{x}` arguments, and
+ * `urn:iki:fn:conditional`, which the host's gateway does not forward) — plus
+ * {@linkcode Game}'s table of views. It holds no rule about the game: which
+ * square or status template shows is a `conditional` in the templates, over
+ * `cell:{x}:{y}`, `winner` and `turn`. What it does NOT do is the interesting
+ * part. It computes nothing about the game: the winner, whose turn it is,
+ * whether a move is legal — each is a resource the host resolves. And it
+ * caches nothing: every read goes to the host, and the HOST's kernel answers
+ * from its cache, recomputing only what a move cut (a move cuts one stored
+ * cell, and the lines, winner and turn through it recompute; the templates
+ * never do). The app is a view over resources, and the kernel does the rest.
  *
  * **Routes** (the book's path ↔ IRI rule: the game is where the page is):
  *
- * - `GET /` and `GET /game/{id}/` — the page: `template:game` filled, with a
+ * - `GET /` and `GET /game/{id}/` — the page: `view:game:{id}` composed, with a
  *   `<base href>` at the game's path, loading the book's vendored htmx and
  *   stylesheet from `/static/`.
  * - `GET {game}iki/tutorial/ttt/view/board` and `…/view/status` — the
- *   fragments, filled here.
+ *   fragments, composed here.
  * - `POST {game}iki/tutorial/ttt/view/play/{x}/{y}` and `…/view/reset` — the
  *   write goes THROUGH the host (a Sink to `move:{x}:{y}` / `reset`), and the
- *   answer is the `reply` template filled here. A refused move is answered,
+ *   answer is `view:reply` composed here. A refused move is answered,
  *   not failed: the refusal's text, as the Rust view shows it.
  *
  * On those paths the app answers what `ttt-host` answers — status and body,
@@ -45,10 +49,11 @@
  * raw resources. The flags are the host's too: `--socket <path>` and
  * `--http <addr>` (default `127.0.0.1:8071`; the host takes 8070).
  *
- * A game `id` is reached as `urn:game:{id}:iki:tutorial:ttt:{name}`, the
- * host's gateway names, which carry the game as a VALUE the host turns into
- * the game's corridor; the root game's names are `urn:iki:tutorial:ttt:{name}`
- * as they are.
+ * Every name in a template is spelled for the root game. A game `id` is
+ * reached as `urn:game:{id}:iki:tutorial:ttt:{name}`, the host's gateway
+ * names, which carry the game as a VALUE the host turns into the game's
+ * corridor; the root game is `urn:game:root:…`, and `/game/root/` is its page
+ * as it is on the host.
  *
  * ⚠ **Write through the host, always.** The host cuts its cached reads when
  * ITS kernel issues the write; a write made behind its back (to a peer store
@@ -81,17 +86,31 @@ import { httpStatus } from "./http_status.ts";
 import { plainInteger } from "./tictactoe_store.ts";
 
 // ---------------------------------------------------------------------------
-// The template format (crates/tic-tac-toe/README.md, "The template format")
+// The template language (crates/tic-tac-toe/README.md, "The template language")
 // ---------------------------------------------------------------------------
 
-/** A slot: `{{name}}` or `{{name 0 -2}}`. */
-const SLOT = /\{\{([a-z][a-z-]*)((?: -?[0-9]+)*)\}\}/g;
+/** A template's arguments: what a view's name captured, or the request's own. */
+export type Args = Record<string, string>;
 
-/** One slot of a template: its name and its arguments, each in its plain spelling. */
-export type Slot = { name: string; args: string[] };
+/** A Source a marker makes: the IRI (arguments filled in) and its query arguments. */
+export type Resolve = (iri: string, args: Args) => Promise<string>;
 
-/** What fills a slot: text (escaped on the way in) or another template's HTML. */
-export type Fill = { text: string } | { html: string };
+/** How a marker splices: `$a` expands the answer, `$r` as it is, `$h` HTML-escaped. */
+type Mode = "a" | "r" | "h";
+
+/** A scanned template: literal text, or a marker's mode and trimmed body. */
+type Segment = string | { mode: Mode; body: string };
+
+/** A marker body: an argument, or a Source with its (possibly quoted) values. */
+type Marker =
+  | { arg: string }
+  | { iri: string; args: [string, { text: string; quoted: boolean }][] };
+
+/** The function the templates call, which the host's gateway does not forward. */
+export const CONDITIONAL = "urn:iki:fn:conditional";
+
+/** How deep `$a` may transclude — `ikigai-fn`'s `COMPOSE_MAX_DEPTH`. */
+const MAX_DEPTH = 32;
 
 const ESCAPES: Record<string, string> = {
   "&": "&amp;",
@@ -101,142 +120,260 @@ const ESCAPES: Record<string, string> = {
   "'": "&#39;",
 };
 
-/** `text`, safe in HTML text or a quoted attribute — the Rust `escape`. */
+/** `text`, safe in HTML text or an attribute quoted either way — what `$h` splices. */
 export function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (c) => ESCAPES[c]);
 }
 
+function refuse(body: string, detail: string): never {
+  throw new EndpointError(`compose: marker \`${body}\`: ${detail}`);
+}
+
 /**
- * `template` as literal text and slots, alternating (text first and last).
- * Any other `{{` — unclosed, capitalized, an argument not in its one plain
- * spelling (`01`, `+1`, `-0`) — is refused, as the Rust `fill` refuses it: a
- * slot nobody fills would reach the page as `{{…}}`.
+ * The index of the `}` closing the marker whose `{` is at `brace`: nested
+ * `{…}` counted, `"…"` spans skipped (`\"` and `\\` escape). -1 if it never closes.
  */
-export function pieces(template: string): (string | Slot)[] {
-  const refuse = (what: string) => {
-    throw new EndpointError(`a template: ${what}`);
-  };
-  const out: (string | Slot)[] = [];
-  let at = 0;
-  for (const m of template.matchAll(SLOT)) {
-    out.push(template.slice(at, m.index));
-    const args = m[2].split(" ").slice(1);
-    for (const arg of args) {
-      if (arg === "-0" || /^-?0[0-9]/.test(arg)) {
-        refuse(`\`${m[0]}\` has an argument \`${arg}\``);
-      }
-    }
-    out.push({ name: m[1], args });
-    at = m.index + m[0].length;
+function markerEnd(text: string, brace: number): number {
+  let [depth, quoted] = [0, false];
+  for (let i = brace + 1; i < text.length; i++) {
+    const c = text[i];
+    if (quoted && c === "\\") i++;
+    else if (c === '"') quoted = !quoted;
+    else if (!quoted && c === "{") depth++;
+    else if (!quoted && c === "}" && depth-- === 0) return i;
   }
-  out.push(template.slice(at));
-  for (const text of out) {
-    if (typeof text === "string" && text.includes("{{")) {
-      refuse(`\`${text}\` has a \`{{\` that is not a slot`);
+  return -1;
+}
+
+/** `text` as literal runs and markers. `$$` is `$`; an unclosed marker is literal. */
+export function scan(text: string): Segment[] {
+  const out: Segment[] = [];
+  let literal = "";
+  for (let i = 0; i < text.length; i++) {
+    const [c, mode] = [text[i], text[i + 1]];
+    if (c === "$" && mode === "$") {
+      literal += "$";
+      i++;
+      continue;
     }
+    const end = c === "$" && "arh".includes(mode) && text[i + 2] === "{"
+      ? markerEnd(text, i + 2)
+      : -1;
+    if (end < 0) {
+      literal += c;
+      continue;
+    }
+    if (literal) out.push(literal);
+    literal = "";
+    out.push({ mode: mode as Mode, body: text.slice(i + 3, end).trim() });
+    i = end;
   }
+  if (literal) out.push(literal);
   return out;
 }
 
-/** `template`, every slot replaced by what `value` says fills it. */
-export function fill(template: string, value: (slot: Slot) => Fill): string {
-  return pieces(template).map((piece) => {
-    if (typeof piece === "string") return piece;
-    const filled = value(piece);
-    return "html" in filled ? filled.html : escapeHtml(filled.text);
-  }).join("");
+/** `s` split on every `sep` outside a `"…"` span. */
+function splitOutsideQuotes(s: string, sep: string): string[] {
+  const parts: string[] = [];
+  let [start, quoted] = [0, false];
+  for (let i = 0; i < s.length; i++) {
+    if (quoted && s[i] === "\\") i++;
+    else if (s[i] === '"') quoted = !quoted;
+    else if (!quoted && s.startsWith(sep, i)) {
+      parts.push(s.slice(start, i));
+      start = i + sep.length;
+      i = start - 1;
+    }
+  }
+  return [...parts, s.slice(start)];
 }
 
-/** The refusal for a slot this view does not fill (the Rust `unfilled`). */
-function unfilled(template: string, name: string): never {
-  throw new EndpointError(
-    `the template \`${template}\` has a slot \`${name}\` this view does not fill`,
+const ARG_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+
+/** Refuse a `{` in `text` that does not open a `{name}` argument. */
+function checkPlaceholders(body: string, text: string): void {
+  for (const m of text.matchAll(/\{([^}]*)(\}?)/g)) {
+    if (!m[2]) refuse(body, "a `{` is never closed");
+    if (!ARG_NAME.test(m[1])) {
+      refuse(body, `\`{${m[1]}}\` is not an argument name`);
+    }
+  }
+}
+
+/** A marker body, parsed: `{name}`, or `IRI[?k=v&…]`. */
+function parseMarker(mode: Mode, body: string): Marker {
+  if (!body) refuse(body, "an empty marker");
+  if (splitOutsideQuotes(body, "||").length > 1) {
+    refuse(body, "`||` fallbacks are not implemented by this filler");
+  }
+  const arg = /^\{(.*)\}$/.exec(body)?.[1];
+  if (arg !== undefined && ARG_NAME.test(arg)) {
+    if (mode === "a") {
+      refuse(body, `\`{${arg}}\` is an argument, never a template`);
+    }
+    return { arg };
+  }
+  const q = body.indexOf("?");
+  const iri = (q < 0 ? body : body.slice(0, q)).trim();
+  checkPlaceholders(body, iri);
+  const args: [string, { text: string; quoted: boolean }][] = [];
+  for (const raw of q < 0 ? [] : splitOutsideQuotes(body.slice(q + 1), "&")) {
+    const pair = raw.trim();
+    if (!pair) continue;
+    const eq = pair.indexOf("=");
+    if (eq < 0) refuse(body, `the argument \`${pair}\` is not key=value`);
+    const value = pair.slice(eq + 1).trim();
+    const quoted = value.length >= 2 && value.startsWith('"') &&
+      value.endsWith('"');
+    if (!quoted) checkPlaceholders(body, value);
+    const text = quoted
+      ? value.slice(1, -1).replace(/\\([\s\S]?)/g, (_, c) => c || "\\")
+      : value;
+    args.push([pair.slice(0, eq).trim(), { text, quoted }]);
+  }
+  return { iri, args };
+}
+
+/** Argument `name`, or the refusal a missing one is. */
+function argument(args: Args, name: string): string {
+  if (!Object.hasOwn(args, name)) throw new MissingArgumentError(name);
+  return args[name];
+}
+
+/** Every `{name}` in `text` replaced: percent-encoded (RFC 6570 simple) in an IRI, verbatim in a value. */
+function fillArguments(text: string, args: Args, encode: boolean): string {
+  return text.replace(/\{([^}]*)\}/g, (_, name) => {
+    const value = argument(args, name);
+    if (!encode) return value;
+    return [...new TextEncoder().encode(value)].map((b) => {
+      const c = String.fromCharCode(b);
+      return /[A-Za-z0-9\-._~]/.test(c)
+        ? c
+        : `%${b.toString(16).toUpperCase().padStart(2, "0")}`;
+    }).join("");
+  });
+}
+
+/**
+ * `urn:iki:fn:conditional?if=A&equals=V&then=B&else=C`: source `A`, and
+ * source ONLY `B` when its trimmed text is exactly `V`, else only `C` (nothing
+ * when there is no `else`). The answer is the chosen template, unexpanded.
+ */
+async function conditional(args: Args, resolve: Resolve): Promise<string> {
+  const [test, equals, then] = ["if", "equals", "then"].map((name) =>
+    argument(args, name)
   );
+  if ((await resolve(test, {})).trim() === equals) return resolve(then, {});
+  return Object.hasOwn(args, "else") ? resolve(args.else, {}) : "";
+}
+
+/**
+ * `template` filled: every marker resolved through `resolve` (or answered by
+ * {@linkcode conditional}) and spliced by its mode. A marker that fails fails
+ * the whole template; a `$h` or `$r` value is never scanned again.
+ */
+export async function compose(
+  template: string,
+  args: Args,
+  resolve: Resolve,
+  depth = 0,
+): Promise<string> {
+  if (depth >= MAX_DEPTH) {
+    throw new EndpointError(`compose: recursion limit (${MAX_DEPTH}) exceeded`);
+  }
+  const segments = scan(template);
+  // Every marker is parsed before any resolves: a malformed one fails the template.
+  const markers = segments.map((s) =>
+    typeof s === "string" ? null : parseMarker(s.mode, s.body)
+  );
+  const filled = await Promise.all(segments.map(async (s, n) => {
+    const marker = markers[n];
+    if (typeof s === "string" || marker === null) return s as string;
+    let answer: string;
+    if ("arg" in marker) {
+      answer = argument(args, marker.arg);
+    } else {
+      const iri = fillArguments(marker.iri, args, true);
+      const query: Args = {};
+      for (const [key, { text, quoted }] of marker.args) {
+        query[key] = quoted ? text : fillArguments(text, args, false);
+      }
+      answer = iri === CONDITIONAL
+        ? await conditional(query, resolve)
+        : await resolve(iri, query);
+      if (s.mode === "a") {
+        return compose(answer, args, resolve, depth + 1);
+      }
+    }
+    return s.mode === "h" ? escapeHtml(answer) : answer;
+  }));
+  return filled.join("");
 }
 
 // ---------------------------------------------------------------------------
-// A game, as the host names it
+// A game, as the host names it, and its views composed here
 // ---------------------------------------------------------------------------
 
 /** What the app needs of a connection to `ttt-host`: a {@linkcode Client} has it. */
 export type Host = Pick<Client, "source" | "sink" | "entries">;
 
+/** The names every template is spelled with: the root game's. */
+const GAME = "urn:iki:tutorial:ttt:";
+
+/**
+ * The views that read, as the tutorial's table binds them: the template each
+ * composes and the arguments its name captures (`y` takes the rest, as a
+ * trailing template variable does).
+ */
+const VIEWS: [RegExp, string, string[]][] = [
+  [/^view:board$/, "board", []],
+  [/^view:status$/, "status", []],
+  [/^view:reply$/, "reply", []],
+  [/^view:square:([^:]+):(.+)$/, "square", ["x", "y"]],
+  [/^view:game:(.+)$/, "game", ["game"]],
+];
+
 /** A game's resources on a `ttt-host`: the root game when `id` is null. */
 export class Game {
   constructor(readonly client: Host, readonly id: string | null) {}
 
-  /** The IRI of the game's resource `name` (e.g. `cell:1:1`). */
+  /** The host's gateway name for the game's resource `name` (e.g. `cell:1:1`). */
   iri(name: string): string {
-    return this.id === null
-      ? `urn:iki:tutorial:ttt:${name}`
-      : `urn:game:${this.id}:iki:tutorial:ttt:${name}`;
-  }
-
-  /** Source `name` in this game, as text. */
-  async text(name: string): Promise<string> {
-    return (await this.client.source(this.iri(name))).text;
+    return `urn:game:${this.id ?? "root"}:iki:tutorial:ttt:${name}`;
   }
 
   /** Sink `name` in this game — the write the host's kernel cuts from. */
   async write(name: string): Promise<string> {
     return (await this.client.sink(this.iri(name))).text;
   }
-}
 
-// ---------------------------------------------------------------------------
-// The views — the Rust `view_board` / `view_status` / `reply`, in TypeScript
-// ---------------------------------------------------------------------------
-
-/** The board: each `{{square x y}}` filled by the square template its cell calls for. */
-export async function viewBoard(game: Game): Promise<string> {
-  const board = await game.text("template:board");
-  const over = await game.text("winner") !== "-";
-  const squares = new Map<string, string>();
-  for (const slot of pieces(board)) {
-    if (typeof slot === "string") continue;
-    if (slot.name !== "square" || slot.args.length !== 2) {
-      unfilled("board", slot.name);
+  /**
+   * A marker's Source, in this game: a view is composed HERE from its
+   * template; any other game name is read from the host in this game.
+   */
+  resolve: Resolve = (iri, args) => {
+    const name = iri.startsWith(GAME) ? iri.slice(GAME.length) : null;
+    for (const [pattern, template, vars] of VIEWS) {
+      const m = name === null ? null : pattern.exec(name);
+      if (m === null) continue;
+      const captured = Object.fromEntries(vars.map((v, n) => [v, m[n + 1]]));
+      return this.view(template, { ...args, ...captured });
     }
-    const [x, y] = slot.args;
-    if (squares.has(`${x} ${y}`)) continue;
-    const mark = await game.text(`cell:${x}:${y}`);
-    const kind = mark !== "-"
-      ? "square-taken"
-      : over
-      ? "square-closed"
-      : "square-open";
-    const fills: Record<string, string> = { x, y, mark };
-    const square = await game.text(`template:${kind}`);
-    squares.set(
-      `${x} ${y}`,
-      fill(
-        square,
-        ({ name }) =>
-          name in fills ? { text: fills[name] } : unfilled(kind, name),
-      ),
-    );
-  }
-  return fill(board, ({ args }) => ({ html: squares.get(args.join(" "))! }));
-}
+    const target = name === null ? iri : this.iri(name);
+    return this.client.source(target, args).then((r) => r.text);
+  };
 
-/** `X to play.`, `O has won.` or `A draw.`: a status template, filled with the mark. */
-export async function viewStatus(game: Game): Promise<string> {
-  const won = await game.text("winner");
-  const [kind, mark] = won === "-"
-    ? ["status-turn", await game.text("turn")]
-    : won === "draw"
-    ? ["status-draw", ""]
-    : ["status-won", won];
-  const template = await game.text(`template:${kind}`);
-  return fill(
-    template,
-    ({ name }) => name === "mark" ? { text: mark } : unfilled(kind, name),
-  );
+  /** `template:{name}`, read from the host and composed with `args`. */
+  async view(name: string, args: Args = {}): Promise<string> {
+    const template = await this.resolve(`${GAME}template:${name}`, {});
+    return compose(template, args, this.resolve);
+  }
 }
 
 /**
- * A write's answer: the `reply` template — what the write said, or the
- * refusal's text — then the status. The error is rendered, never inspected.
+ * A write's answer: the write through the host, then `view:reply` with its
+ * `message` — what the write said, or the refusal's text. The error is
+ * rendered, never inspected.
  */
 export async function reply(game: Game, write: string): Promise<string> {
   let message: string;
@@ -246,17 +383,7 @@ export async function reply(game: Game, write: string): Promise<string> {
     if (!(e instanceof EndpointError)) throw e;
     message = rustDisplay(e);
   }
-  const status = await viewStatus(game);
-  const template = await game.text("template:reply");
-  return fill(
-    template,
-    ({ name }) =>
-      name === "message"
-        ? { text: message }
-        : name === "status"
-        ? { html: status }
-        : unfilled("reply", name),
-  );
+  return game.resolve(`${GAME}view:reply`, { message });
 }
 
 /**
@@ -328,10 +455,7 @@ export async function games(client: Host): Promise<string[]> {
 /** A game's page: the document around its `game` template — `ttt-host`'s, byte for byte. */
 export async function page(game: Game, others: string[]): Promise<string> {
   const label = game.id ?? "root";
-  const shell = fill(
-    await game.text("template:game"),
-    ({ name }) => name === "game" ? { text: label } : unfilled("game", name),
-  );
+  const shell = await game.resolve(`${GAME}view:game:${label}`, {});
   const base = game.id === null ? "/" : `/game/${game.id}/`;
   const title = escapeHtml(
     game.id === null ? "the root game" : `game ${label}`,
@@ -374,30 +498,41 @@ const HTML = "text/html;charset=utf-8";
 // The path rule — `ttt-host`'s, which is `ikigai-web`'s
 // ---------------------------------------------------------------------------
 
+/** A request path `ttt-host`'s edge refuses before routing it: `400` with this text. */
+export class PathError extends Error {}
+
 /**
- * A request path, percent-decoded exactly as `ttt-host` decodes it: its edge
- * (`ikigai-web` 0.1.29, `urldecode`) decodes `%XX` and turns `+` into a space
- * in the PATH as well as the query. The second is a quirk of the reference,
- * copied so both faces answer alike: `play/+1/0` is a path with a space in it
- * there, so it is refused as `not a resource path`, not as a coordinate.
+ * A request path's segments, decoded exactly as `ttt-host`'s edge
+ * (`ikigai-web` 0.1.30) decodes them: split on `/` FIRST, each segment
+ * percent-decoded on its own (so `%2F` is data inside its segment, never a
+ * separator), `+` a literal `+`, and empty segments dropped. A `%` not
+ * followed by two hex digits is refused (`malformed percent-escape`), and so
+ * is a segment that is not UTF-8 once decoded.
  */
-export function decodePath(path: string): string {
-  const bytes = new TextEncoder().encode(path);
-  const out: number[] = [];
-  let i = 0;
-  while (i < bytes.length) {
-    const b = bytes[i];
-    // Rust's `u8::from_str_radix` takes a leading `+`, so `%+1` is byte 1 there.
-    const hex = path.slice(i + 1, i + 3);
-    if (b === 0x25 && i + 2 < bytes.length && /^\+?[0-9A-Fa-f]+$/.test(hex)) {
-      out.push(parseInt(hex, 16));
-      i += 3;
-    } else {
-      out.push(b === 0x2b ? 0x20 : b);
-      i += 1;
+export function pathSegments(path: string): string[] {
+  const utf8 = new TextDecoder("utf-8", { fatal: true });
+  const hex = (c: string | undefined) =>
+    c !== undefined && /^[0-9A-Fa-f]$/.test(c) ? c : null;
+  return path.split("/").filter((s) => s !== "").map((segment) => {
+    const bytes: number[] = [];
+    for (let i = 0; i < segment.length; i++) {
+      if (segment[i] !== "%") {
+        bytes.push(...new TextEncoder().encode(segment[i]));
+        continue;
+      }
+      const [hi, lo] = [hex(segment[i + 1]), hex(segment[i + 2])];
+      if (hi === null || lo === null) {
+        throw new PathError("malformed percent-escape");
+      }
+      bytes.push(parseInt(hi + lo, 16));
+      i += 2;
     }
-  }
-  return new TextDecoder().decode(new Uint8Array(out));
+    try {
+      return utf8.decode(new Uint8Array(bytes));
+    } catch {
+      throw new PathError("not UTF-8 once decoded");
+    }
+  });
 }
 
 /**
@@ -430,14 +565,14 @@ export type Route =
   | { kind: "other" };
 
 /**
- * A request path, classified. Empty segments collapse (`ttt-host` joins the
- * non-empty ones), so `/game/a` and `/game/a/` are one page, and the relative
+ * A request path, classified (a {@linkcode PathError} if the edge refuses
+ * it). Empty segments collapse (`ttt-host` joins the non-empty ones), so `/game/a` and `/game/a/` are one page, and the relative
  * path `a/b/c` is `urn:a:b:c` — the game is where the page is. A play's `y`
  * takes the rest of the name, as the host's template does, so `play/1/2/3`
  * is the play `(1, "2:3")`, refused for its coordinate.
  */
 export function route(path: string): Route {
-  const segments = decodePath(path).split("/").filter((s) => s !== "");
+  const segments = pathSegments(path);
   if (segments.length === 0) {
     return { kind: "page", game: null, iri: "urn:ttt-host:page:root" };
   }
@@ -445,8 +580,10 @@ export function route(path: string): Route {
     const game = segments[1];
     return { kind: "page", game, iri: `urn:ttt-host:page:game:${game}` };
   }
-  const joined = "/" + segments.join("/");
-  if (STATIC[joined] !== undefined) return { kind: "static", path: joined };
+  const file = `/static/${segments[1]}`;
+  if (segments.length === 2 && segments[0] === "static" && STATIC[file]) {
+    return { kind: "static", path: file };
+  }
   const rest = segments.join(":");
   let game: string | null = null;
   let name = rest;
@@ -504,7 +641,9 @@ function allowOf(verb: "source" | "sink" | null): string {
  * serves no raw resource (`board`, `stored:…`, `template:…`): a view over
  * resources, not a proxy for them. What the host's edge does, in its order:
  *
- * 1. a path that is not an IRI → `400 not a resource path`;
+ * 1. a malformed percent-escape, or a segment that is not UTF-8 once
+ *    decoded → `400` saying which; a path that is not an IRI →
+ *    `400 not a resource path`;
  * 2. `OPTIONS` → `204` with the `Allow` list; a method with no verb → `405`;
  * 3. a game the host does not serve declares nothing, so it has no `405`:
  *    `PATCH` → `415`, anything else → `404 no endpoint resolved for <iri>`;
@@ -542,7 +681,13 @@ export function handler(
         ...headers,
       });
 
-    const at = route(new URL(request.url).pathname);
+    let at: Route;
+    try {
+      at = route(new URL(request.url).pathname);
+    } catch (e) {
+      if (!(e instanceof PathError)) throw e;
+      return text(400, e.message);
+    }
     if (at.kind === "other") return text(404, "not found");
     if (at.kind !== "static" && !isIri(at.iri.slice("urn:".length))) {
       return text(400, "not a resource path");
@@ -559,7 +704,7 @@ export function handler(
       // The host's games, read from its catalog on every request: nothing here caches.
       const served = at.kind === "static" ? [] : await games(client);
       if (at.kind !== "static" && at.game !== null) {
-        if (!served.includes(at.game)) {
+        if (at.game !== "root" && !served.includes(at.game)) {
           if (request.method === "PATCH") {
             return text(415, "no patch strategy for this Content-Type");
           }
@@ -583,8 +728,9 @@ export function handler(
         });
       }
       const view = at.view;
-      if (view === "board") return html(await viewBoard(game));
-      if (view === "status") return html(await viewStatus(game));
+      if (view === "board" || view === "status") {
+        return html(await game.resolve(`${GAME}view:${view}`, {}));
+      }
       if (view === "reset") return html(await reply(game, "reset"));
       const [x, y] = [plainInteger("x", view.x), plainInteger("y", view.y)];
       return html(await reply(game, `move:${x}:${y}`));
