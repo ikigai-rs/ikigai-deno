@@ -410,7 +410,7 @@ Deno.test("every taxonomy variant crosses with kind and transience intact", () =
       UnavailableError,
       true,
     ],
-    [{ kind: "conflict", message: "square taken" }, ConflictError, false],
+    [{ kind: "conflict", message: "1,1 is taken" }, ConflictError, false],
   ];
   for (const [failure, cls, transient] of cases) {
     const decoded = wire.decodeReply(
@@ -496,9 +496,9 @@ const RUST_DISPLAY: [wire.WireFailure, string, string][] = [
     "unavailable: connection refused",
   ],
   [
-    { kind: "conflict", message: "square taken" },
-    "square taken",
-    "conflict: square taken",
+    { kind: "conflict", message: "1,1 is taken" },
+    "1,1 is taken",
+    "conflict: 1,1 is taken",
   ],
 ];
 
