@@ -296,8 +296,13 @@ function descriptionText(d: DescriptionModel): string {
  * stay on the endpoint node too, as core writes them.
  */
 function descriptionTurtle(d: DescriptionModel): string {
+  // Core's `escape_literal`: a short Turtle string cannot carry a raw line
+  // break, so `\n` and `\r` (and `\t`, as core does) are escaped too.
   const lit = (s: string): string =>
-    '"' + s.replaceAll("\\", "\\\\").replaceAll('"', '\\"') + '"';
+    '"' +
+    s.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\n", "\\n")
+      .replaceAll("\r", "\\r").replaceAll("\t", "\\t") +
+    '"';
   const capTerm = (scope: string): string =>
     scope.startsWith("urn:") || scope.startsWith("http://") ||
       scope.startsWith("https://")

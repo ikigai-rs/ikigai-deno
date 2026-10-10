@@ -35,9 +35,11 @@ manifold joins its rows to, so the digest has to be core's BLAKE3 to the byte,
 and neither Web Crypto nor `node:crypto` offers BLAKE3 in Deno. `@std/crypto`
 was chosen over a pure-JS port because it is Deno's own standard library, has no
 dependencies of its own, and compiles the same Rust `blake3` crate core uses to
-Wasm; `tests/contract_test.ts` pins the result against vectors a Rust build of
-core produced. Only the serving side (`./serve` and the root `.`) loads it: the
-`./client` and `./wire` entry points still import nothing.
+Wasm; `tests/contract_test.ts` pins the result against
+`tests/contract_vectors.json`, a verbatim copy of the contract vectors
+ikigai-core computes and commits (`crates/ikigai-vocab/tests/vectors/`). Only
+the serving side (`./serve` and the root `.`) loads it: the `./client` and
+`./wire` entry points still import nothing.
 
 The rest stays out of a consumer's graph: `@std/assert` is test-only; the web
 frameworks in the import map are used only by `examples/`; **zod** is a peer
