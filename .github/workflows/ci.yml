@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# The gate commands live in ONE place: the `tasks` of deno.json. Each step below
+# runs one of them, and `deno task check` (which the repo's justfile `gates`
+# recipe calls) chains the same four in the same order, so local gates and CI
+# cannot drift apart. Change a gate in deno.json, not here.
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -14,12 +18,12 @@ jobs:
         with:
           deno-version: v2.x
       - name: Format
-        run: deno fmt --check
+        run: deno task fmt-check
       - name: Lint
-        run: deno lint
+        run: deno task lint
       - name: Type-check
-        run: deno check src/mod.ts src/zod.ts examples/demo.ts examples/endpoints.ts examples/hono_app.ts examples/oak_app.ts examples/fresh_app.ts examples/tictactoe_store.ts examples/tictactoe_app.ts
+        run: deno task typecheck
       - name: Test
         # Integration tests that need the `ikigai` binary skip themselves
         # when it is absent (CI has no Rust host; they run locally).
-        run: deno test -A
+        run: deno task test

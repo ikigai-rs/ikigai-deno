@@ -66,10 +66,12 @@ is the sharp edge of the transition window, and it is why this client moved: you
 may still write the old name, but you must read the new one.
 
 Dev setup: `deno task check` runs the CI gates (`deno fmt --check` · `deno lint`
-· `deno check` · `deno test -A`). The integration tests drive the real `ikigai`
-binary and skip themselves when it is not on `PATH` (or at
-`~/.cargo/bin/ikigai`) — and the `urn:iki:fn:` ones skip again, loudly, when the
-binary predates 0.1.18, so an old host reports a floor rather than a failure.
+· `deno check` · `deno test -A`), and `just gates` runs the same thing. Each
+gate is a task in `deno.json`, and CI runs those tasks, so that file is the one
+place to change a gate. The integration tests drive the real `ikigai` binary and
+skip themselves when it is not on `PATH` (or at `~/.cargo/bin/ikigai`) — and the
+`urn:iki:fn:` ones skip again, loudly, when the binary predates 0.1.18, so an
+old host reports a floor rather than a failure.
 
 ## Client (the script front door)
 

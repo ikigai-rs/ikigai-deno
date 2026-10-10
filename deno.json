@@ -22,7 +22,10 @@
     "examples/tictactoe_static/"
   ],
   "tasks": {
-    "check": "deno fmt --check && deno lint && deno check src/mod.ts src/zod.ts examples/demo.ts examples/endpoints.ts examples/hono_app.ts examples/oak_app.ts examples/fresh_app.ts examples/tictactoe_store.ts examples/tictactoe_app.ts && deno test -A",
-    "test": "deno test -A"
+    "fmt-check": "deno fmt --check",
+    "lint": "deno lint",
+    "typecheck": "deno check src/mod.ts src/zod.ts examples/demo.ts examples/endpoints.ts examples/hono_app.ts examples/oak_app.ts examples/fresh_app.ts examples/tictactoe_store.ts examples/tictactoe_app.ts",
+    "test": "deno test -A",
+    "check": "deno task fmt-check && deno task lint && deno task typecheck && deno task test"
   }
 }
