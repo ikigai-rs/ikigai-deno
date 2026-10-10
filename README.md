@@ -1,6 +1,6 @@
 # ikigai-deno
 
-A **zero-dependency** TypeScript (Deno-first) client and servable peer for the
+A TypeScript (Deno-first) client and servable peer for the
 [ikigai](https://github.com/ikigai-rs) wire protocol over Unix domain sockets.
 This is **L0** of the polyglot ladder: no Rust, no core changes — a Deno process
 can _drive_ a running ikigai kernel, and a Deno process can _be_ resources that
@@ -25,12 +25,25 @@ host.
 
 ## Install
 
-Nothing to install: Deno imports by specifier, and the core of this package has
-zero runtime dependencies (`@std/assert` is test-only; the web frameworks in the
-import map are used only by `examples/`; **zod** is a peer dependency of the
-`./zod` entry point alone — nothing else imports it, so consumers who declare
-`args:` explicitly never resolve it). Until it is published to JSR, import by
-path or URL:
+Nothing to install: Deno imports by specifier. The package has **one runtime
+dependency**, [`jsr:@std/crypto`](https://jsr.io/@std/crypto) (`^1.0.0`), for
+BLAKE3 — and it is no longer zero-dependency because of it. A served peer's
+Turtle Meta face names each verb's contract by its content,
+`urn:ikigai:contract:{id}:{verb}:b3:{hex}`, exactly as `ikigai-core` does
+(ikigai ledger items 948 and 1034): that IRI is what a Rust host's action
+manifold joins its rows to, so the digest has to be core's BLAKE3 to the byte,
+and neither Web Crypto nor `node:crypto` offers BLAKE3 in Deno. `@std/crypto`
+was chosen over a pure-JS port because it is Deno's own standard library, has no
+dependencies of its own, and compiles the same Rust `blake3` crate core uses to
+Wasm; `tests/contract_test.ts` pins the result against vectors a Rust build of
+core produced. Only the serving side (`./serve` and the root `.`) loads it: the
+`./client` and `./wire` entry points still import nothing.
+
+The rest stays out of a consumer's graph: `@std/assert` is test-only; the web
+frameworks in the import map are used only by `examples/`; **zod** is a peer
+dependency of the `./zod` entry point alone — nothing else imports it, so
+consumers who declare `args:` explicitly never resolve it. Until it is published
+to JSR, import by path or URL:
 
 ```ts
 import { connect, endpoint, serve } from "./src/mod.ts";
@@ -177,7 +190,11 @@ What a served endpoint gets for free, because its describe face is real:
 - **Tracing**: a traced resolution through the mount gets a span for the Deno
   invocation stitched into the host's execution tree.
 - Meta faces: `text/turtle` (default — skolemized `ik:` graph, no blank nodes),
-  `text/plain`, `application/json`.
+  `text/plain`, `application/json`. The Turtle face is `ikigai_vocab::to_turtle`
+  byte for byte: each `ik:Action` node is its content-addressed contract,
+  `urn:ikigai:contract:{id}:{verb}:b3:{hex}`, with its inputs under it, so a
+  host's manifold row (`urn:ikigai:match:{verb}:{pattern}`) reaches it by
+  `ik:contract`. `contractIri` and `matchIri` compute both names.
 
 ### The hello retires the entries guessing
 
@@ -237,7 +254,7 @@ time — wire arguments are named text values, and a face that cannot say what i
 takes would make the manifold lie. Bad input at dispatch is a clean endpoint
 error naming the field; wire text is coerced by the declared type first (`"3.5"`
 → `3.5`, `"true"` → `true`), so handlers never `String(x)` anything. Explicit
-`args:` still work everywhere (the core stays zero-dep); given BOTH, the
+`args:` still work everywhere (the core never imports zod); given BOTH, the
 explicit specs win the describe face but are checked against the schema, loudly,
 on any contradiction.
 
@@ -377,8 +394,8 @@ TypeScript on both ends of the game, with the Rust kernel in the middle:
 - [`examples/tictactoe_store.ts`](examples/tictactoe_store.ts) — the game's
   STATE: the stored cell, served from Deno (above).
 - [`examples/tictactoe_app.ts`](examples/tictactoe_app.ts) — the game's
-  RENDERING: a zero-dependency `Deno.serve` app that connects to `ttt-host` as
-  an IPC client and serves the playable board. It reads `template:*`,
+  RENDERING: a framework-free `Deno.serve` app that connects to `ttt-host` as an
+  IPC client and serves the playable board. It reads `template:*`,
   `cell:{x}:{y}`, `winner` and `turn` from the host and composes the views
   itself: `compose` implements the subset of the template language the templates
   use (the tutorial README's "The template language", whose 38 fill-and-refuse

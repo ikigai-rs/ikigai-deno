@@ -391,6 +391,7 @@
       "jsr:@hono/hono@^4.13.0",
       "jsr:@oak/oak@^17.2.0",
       "jsr:@std/assert@1",
+      "jsr:@std/crypto@1",
       "npm:preact-render-to-string@^6.6.0",
       "npm:preact@^10.27.0",
       "npm:zod@4"

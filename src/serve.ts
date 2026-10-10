@@ -83,6 +83,7 @@ import {
   verbName,
 } from "./wire.ts";
 import { UriTemplate } from "./template.ts";
+import { contractIri, escapeIriFragment } from "./contract.ts";
 
 export { TemplateError, UriTemplate } from "./template.ts";
 
@@ -289,8 +290,10 @@ function descriptionText(d: DescriptionModel): string {
 /**
  * The graph face — mirrors `ikigai_vocab::to_turtle`: skolemized node IRIs,
  * no blank nodes, the shared `ik:` vocabulary, one `ik:Action` per non-Meta
- * verb. A synthesized action REFERENCES the flat input nodes; an explicit
- * action gets its own action-scoped input nodes.
+ * verb. Each action node is CONTENT-ADDRESSED ({@linkcode contractIri},
+ * `urn:ikigai:contract:{id}:{verb}:b3:{hex}`) and owns its inputs at
+ * `{contract}:input:{name}`, synthesized or explicit alike; the flat inputs
+ * stay on the endpoint node too, as core writes them.
  */
 function descriptionTurtle(d: DescriptionModel): string {
   const lit = (s: string): string =>
@@ -311,7 +314,7 @@ function descriptionTurtle(d: DescriptionModel): string {
     return node;
   };
 
-  const endpointIri = `urn:ikigai:endpoint:${d.id}`;
+  const endpointIri = `urn:ikigai:endpoint:${escapeIriFragment(d.id)}`;
   const preds: string[] = ["a ik:Endpoint", `ik:id ${lit(d.id)}`];
   if (d.title) preds.push(`ik:title ${lit(d.title)}`);
   if (d.summary) preds.push(`ik:summary ${lit(d.summary)}`);
@@ -327,14 +330,14 @@ function descriptionTurtle(d: DescriptionModel): string {
 
   const extraNodes: string[] = [];
   for (const arg of d.inputs) {
-    const nodeIri = `${endpointIri}:input:${arg.name}`;
+    const nodeIri = `${endpointIri}:input:${escapeIriFragment(arg.name)}`;
     preds.push(`ik:input <${nodeIri}>`);
     extraNodes.push(`<${nodeIri}> ${inputPredicates(arg)} .`);
   }
 
   for (const action of actionSpecs(d)) {
     const verb = verbName(action.verb);
-    const actionIri = `${endpointIri}:action:${verb.toLowerCase()}`;
+    const actionIri = contractIri(d.id, action);
     preds.push(`ik:action <${actionIri}>`);
     const actionPreds = ["a ik:Action", `ik:verb ${lit(verb)}`];
     if (action.summary) actionPreds.push(`ik:summary ${lit(action.summary)}`);
@@ -344,15 +347,9 @@ function descriptionTurtle(d: DescriptionModel): string {
     for (const cap of action.requires) {
       actionPreds.push(`ik:requires ${capTerm(cap)}`);
     }
-    const synthesized = !d.actions.some((a) => a.verb === action.verb);
     for (const arg of action.inputs) {
-      let nodeIri: string;
-      if (synthesized) {
-        nodeIri = `${endpointIri}:input:${arg.name}`;
-      } else {
-        nodeIri = `${actionIri}:input:${arg.name}`;
-        extraNodes.push(`<${nodeIri}> ${inputPredicates(arg)} .`);
-      }
+      const nodeIri = `${actionIri}:input:${escapeIriFragment(arg.name)}`;
+      extraNodes.push(`<${nodeIri}> ${inputPredicates(arg)} .`);
       actionPreds.push(`ik:input <${nodeIri}>`);
     }
     extraNodes.push(`<${actionIri}> ` + actionPreds.join(" ;\n    ") + " .");

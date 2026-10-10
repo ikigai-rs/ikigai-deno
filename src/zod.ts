@@ -46,7 +46,7 @@
  *
  * This module is deliberately NOT re-exported from `mod.ts`: zod is a peer
  * dependency of this file alone, resolved only when `@ikigai/wire/zod` is
- * imported. `src/` without it stays zero-dependency for consumers who
+ * imported. `src/` without it never resolves zod, for consumers who
  * declare `args:` explicitly.
  *
  * The explicit `args:` form keeps working unchanged. When BOTH `args:` and
