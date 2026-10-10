@@ -136,6 +136,29 @@ export class ProtocolError extends WireError {}
  */
 export class EndpointError extends WireError {
   readonly transient: boolean = false;
+
+  /**
+   * The error as the Rust kernel's `Display` prints it (`impl fmt::Display
+   * for ikigai_core::Error`): the variant's prefix, then the message. Each
+   * subclass renders its own variant; this base is `Endpoint` (and an
+   * unknown-future variant or a legacy flat string, which Rust also reads as
+   * `Endpoint`).
+   *
+   * `message` stays the bare text the wire carries, so
+   * {@linkcode toWireFailure} never sends the prefix twice. Use `display()`
+   * where a person reads the error the way a Rust face would show it.
+   *
+   * ```ts
+   * import { DeniedError, EndpointError, UnresolvedError } from "./wire.ts";
+   * new EndpointError("boom").display(); // "endpoint error: boom"
+   * new DeniedError("needs urn:cap:x").display(); // "denied: needs urn:cap:x"
+   * new DeniedError("needs urn:cap:x").message; // "needs urn:cap:x"
+   * new UnresolvedError("urn:x:y").display(); // "no endpoint resolved for urn:x:y"
+   * ```
+   */
+  display(): string {
+    return `endpoint error: ${this.message}`;
+  }
 }
 
 /**
@@ -151,6 +174,11 @@ export class UnresolvedError extends EndpointError {
     super(`no endpoint resolved for ${iri}`);
     this.iri = iri;
   }
+
+  /** Rust's Display for this variant is the message itself. */
+  override display(): string {
+    return this.message;
+  }
 }
 
 /** A required argument was absent (`Error::MissingArgument`). */
@@ -160,6 +188,11 @@ export class MissingArgumentError extends EndpointError {
   constructor(argument: string) {
     super(`missing required argument \`${argument}\``);
     this.argument = argument;
+  }
+
+  /** Rust's Display for this variant is the message itself. */
+  override display(): string {
+    return this.message;
   }
 }
 
@@ -173,6 +206,11 @@ export class InvalidArgumentError extends EndpointError {
     this.argument = argument;
     this.detail = detail;
   }
+
+  /** Rust's Display for this variant is the message itself. */
+  override display(): string {
+    return this.message;
+  }
 }
 
 /**
@@ -180,13 +218,23 @@ export class InvalidArgumentError extends EndpointError {
  * **permanent** denial. A failover must not paper over it with a weaker
  * local answer; an HTTP face says 403.
  */
-export class DeniedError extends EndpointError {}
+export class DeniedError extends EndpointError {
+  /** Rust's Display: `denied: {msg}`. */
+  override display(): string {
+    return `denied: ${this.message}`;
+  }
+}
 
 /**
  * A bound endpoint reports the fronted thing absent (`Error::NotFound`) —
  * **permanent**; an HTTP face says 404.
  */
-export class NotFoundError extends EndpointError {}
+export class NotFoundError extends EndpointError {
+  /** Rust's Display: `not found: {msg}`. */
+  override display(): string {
+    return `not found: ${this.message}`;
+  }
+}
 
 /**
  * The request is well-formed and authorized and its target exists, but the
@@ -201,7 +249,12 @@ export class NotFoundError extends EndpointError {}
  * is the taxonomy. Only the downgrade to a v7 peer bakes a `conflict: `
  * prefix into text, because there the text is all that survives.
  */
-export class ConflictError extends EndpointError {}
+export class ConflictError extends EndpointError {
+  /** Rust's Display: `conflict: {msg}`. */
+  override display(): string {
+    return `conflict: ${this.message}`;
+  }
+}
 
 /**
  * The remote operation exceeded its time budget (`Error::Timeout`) —
@@ -210,6 +263,11 @@ export class ConflictError extends EndpointError {}
  */
 export class TimeoutError extends EndpointError {
   override readonly transient: boolean = true;
+
+  /** Rust's Display: `timeout: {msg}`. */
+  override display(): string {
+    return `timeout: ${this.message}`;
+  }
 }
 
 /**
@@ -218,6 +276,11 @@ export class TimeoutError extends EndpointError {
  */
 export class UnavailableError extends EndpointError {
   override readonly transient: boolean = true;
+
+  /** Rust's Display: `unavailable: {msg}`. */
+  override display(): string {
+    return `unavailable: ${this.message}`;
+  }
 }
 
 /** A clean or mid-frame connection close while reading a frame. */
@@ -518,8 +581,19 @@ export type WireFailure =
 /**
  * Rebuild the typed error a {@linkcode WireFailure} carries — the client's
  * side of `impl From<WireError> for ikigai_core::Error`. The variant (and so
- * `transient`) survives the wire; the message renders the way the Rust
- * kernel would.
+ * `transient`) survives the wire. `message` is what the wire carried: for
+ * `unresolved`, `missingArgument` and `invalidArgument` that is already
+ * Rust's rendering, and for every other variant it is the bare message,
+ * WITHOUT the variant's `denied: ` / `not found: ` / … prefix. The error's
+ * `display()` is the text the Rust kernel's `Display` prints, for every
+ * variant.
+ *
+ * ```ts
+ * import { typedError } from "./wire.ts";
+ * const e = typedError({ kind: "notFound", message: "no such row" });
+ * e.message; // "no such row"
+ * e.display(); // "not found: no such row"
+ * ```
  */
 export function typedError(failure: WireFailure): EndpointError {
   switch (failure.kind) {

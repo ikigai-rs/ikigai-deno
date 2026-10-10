@@ -110,11 +110,14 @@ Notes:
   `NotFoundError`, `TimeoutError`, `UnavailableError`, and since v8
   `ConflictError` (permanent) — all subclassing `EndpointError`, all carrying
   `.transient` (`true` only for timeout/unavailable, mirroring
-  `ikigai_core::Error::is_transient`). Message texts render the way the Rust
-  kernel would. An unknown FUTURE taxonomy variant degrades to the base
-  `EndpointError`, naming the variant. A dead socket raises `ConnectionLost`; a
-  hung server trips the read deadline (default 300 s — long resolutions are
-  silent, so silence is not proof of death; same rationale as the Rust client).
+  `ikigai_core::Error::is_transient`). `.message` is what the wire carried (the
+  bare message for the message-bearing variants, so it never crosses twice
+  prefixed); `.display()` is the text Rust's `Display` prints for every variant
+  (`denied: needs urn:cap:x`, `not found: no such row`, …). An unknown FUTURE
+  taxonomy variant degrades to the base `EndpointError`, naming the variant. A
+  dead socket raises `ConnectionLost`; a hung server trips the read deadline
+  (default 300 s — long resolutions are silent, so silence is not proof of
+  death; same rationale as the Rust client).
 - The client **reconnects**: after a `ConnectionLost`, the next call redials
   once (fresh hello, same mode) before failing — a restarted peer stops meaning
   failure-forever. A call is only ever retried when its SEND failed (the frame

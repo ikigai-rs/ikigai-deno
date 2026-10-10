@@ -44,7 +44,6 @@ import {
   type Resolve,
   type Route,
   route,
-  rustDisplay,
   trim,
 } from "../examples/tictactoe_app.ts";
 
@@ -341,26 +340,25 @@ Deno.test("ttt app: $a expands with the same arguments, and a value is never res
 
 Deno.test("ttt app: a refusal reads as the Rust kernel's Display prints it", () => {
   assertStrictEquals(
-    rustDisplay(
-      new InvalidArgumentError("x, y", "1,1 is taken — X played there"),
-    ),
+    new InvalidArgumentError("x, y", "1,1 is taken — X played there")
+      .display(),
     "invalid argument `x, y`: 1,1 is taken — X played there",
   );
   assertStrictEquals(
-    rustDisplay(new NotFoundError("gone")),
+    new NotFoundError("gone").display(),
     "not found: gone",
   );
   assertStrictEquals(
-    rustDisplay(new EndpointError("boom")),
+    new EndpointError("boom").display(),
     "endpoint error: boom",
   );
   // Core's `Error::Conflict` Display (0.1.80), carried typed since wire v8.
   assertStrictEquals(
-    rustDisplay(new ConflictError("square taken")),
+    new ConflictError("square taken").display(),
     "conflict: square taken",
   );
   assertStrictEquals(
-    rustDisplay(new UnresolvedError("urn:x")),
+    new UnresolvedError("urn:x").display(),
     "no endpoint resolved for urn:x",
   );
 });
@@ -746,6 +744,12 @@ Deno.test("ttt app: wrong verbs, bad coordinates and unknown games are refused",
     ["GET", "/game/a/iki/tutorial/ttt/board", 404, "not found"],
     ["GET", "/game/a/stored/1/1", 404, "not found"],
     ["GET", "/nothing", 404, "not found"],
+    // Not a view, so no method is consulted: an unknown method or OPTIONS is
+    // the same 404 as GET (Python's rule too; ledger #592 asked).
+    ["FOO", "/nothing", 404, "not found"],
+    ["OPTIONS", "/nothing", 404, "not found"],
+    ["FOO", "/game/a/iki/tutorial/ttt/board", 404, "not found"],
+    ["OPTIONS", "/game/a/stored/1/1", 404, "not found"],
   ];
   for (const [method, path, code, body] of cases) {
     assertEquals(
