@@ -25,6 +25,9 @@
  * each with its own contract ({@linkcode family}):
  *
  * ```ts
+ * import { family } from "@ikigai/wire/serve";
+ *
+ * const marks = new Map<string, string>();
  * const cell = family("urn:ts:stored:{x}:{y}", { id: "stored" })
  *   .source({ cacheable: true }, ({ x, y }) => marks.get(`${x},${y}`) ?? "-")
  *   .sink({}, ({ x, y, content }) => (marks.set(`${x},${y}`, `${content}`), "ok"))
@@ -832,6 +835,13 @@ const VERB_ORDER = [Verb.Source, Verb.Sink, Verb.Exists, Verb.Delete];
  * - Any verb not declared is a typed refusal naming the ones that are.
  *
  * ```ts
+ * import { family } from "@ikigai/wire/serve";
+ *
+ * // Stand-ins for your own storage.
+ * declare function read(...cell: unknown[]): string;
+ * declare function write(...cell: unknown[]): string;
+ * declare function clear(...cell: unknown[]): string;
+ *
  * const cell = family("urn:ts:stored:{x}:{y}", { id: "stored" })
  *   .source({ cacheable: true }, ({ x, y }) => read(x, y))
  *   .sink({}, ({ x, y, content }) => write(x, y, content))
