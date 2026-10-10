@@ -5,8 +5,8 @@
  * contract — the ArgSpecs the host engine routes named arguments by derive
  * from it, the same schema validates every dispatch, and the handlers
  * receive TYPED strings (no `String(text)` coercion). Compare
- * `examples/demo.ts`, which declares explicit `args:` and stays
- * zero-dependency.
+ * `examples/demo.ts`, which declares explicit `args:` and never imports
+ * zod.
  *
  * All three are pure functions of their inputs, so they declare
  * `cacheable: true` — served directly that only marks the representation

@@ -1,5 +1,5 @@
 /**
- * ikigai-deno: a zero-dependency TypeScript (Deno-first) client and servable
+ * ikigai-deno: a TypeScript (Deno-first) client and servable
  * peer for the ikigai wire protocol over Unix domain sockets.
  *
  * L0 of the polyglot ladder — no Rust, no core changes. A Deno process can
@@ -86,6 +86,15 @@ export {
   defaultSocketPath,
 } from "./client.ts";
 export type { Args, ArgValue, ConnectOptions } from "./client.ts";
+
+export {
+  CONTRACT_PREFIX,
+  contractId,
+  contractIri,
+  escapeIriFragment,
+  MATCH_PREFIX,
+  matchIri,
+} from "./contract.ts";
 
 export {
   ArgSpec,

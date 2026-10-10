@@ -322,28 +322,34 @@ Deno.test("family: the Turtle face has one action per verb with action-scoped in
     await using k = await connect(path);
     const ttl = (await k.meta("urn:ts:kv:a:1")).text;
     assert(ttl.includes('ik:verb "Source", "Sink", "Delete", "Meta"'), ttl);
-    for (const verb of ["source", "sink", "delete"]) {
-      assert(
-        ttl.includes(
-          `<urn:ikigai:endpoint:kv:action:${verb}> a ik:Action`,
+    // Each action node is its content-addressed contract (core 0.1.91,
+    // ledger #948), and owns its inputs under that IRI.
+    const contract = (verb: string): string => {
+      const m = ttl.match(
+        new RegExp(
+          `<(urn:ikigai:contract:kv:${verb}:b3:[0-9a-f]{64})> a ik:Action`,
         ),
-        ttl,
       );
+      assert(m !== null, `${verb}: ${ttl}`);
+      return m[1];
+    };
+    for (const verb of ["source", "sink", "delete"]) {
+      const iri = contract(verb);
+      assert(ttl.includes(`ik:action <${iri}>`), ttl);
       assert(
         ttl.includes(
-          `<urn:ikigai:endpoint:kv:action:${verb}:input:key> ik:inputName "key" ;\n` +
+          `<${iri}:input:key> ik:inputName "key" ;\n` +
             `    ik:source "binding" ;\n    ik:required true`,
         ),
         ttl,
       );
     }
-    assert(
-      ttl.includes("<urn:ikigai:endpoint:kv:action:sink:input:content>"),
-      ttl,
-    );
+    assert(ttl.includes(`<${contract("sink")}:input:content>`), ttl);
     // the Delete action does not carry the Sink's content
-    assert(!ttl.includes("action:delete:input:content"), ttl);
-    assert(!ttl.includes("action:meta"), ttl);
+    assert(!ttl.includes(`<${contract("delete")}:input:content>`), ttl);
+    assert(!ttl.includes(":meta:b3:"), ttl);
+    // the retired per-id action IRI (ledger #948) is gone
+    assert(!ttl.includes(":action:"), ttl);
     assert(!ttl.includes("_:"), "no blank nodes");
   });
 });
@@ -372,9 +378,15 @@ Deno.test("flat endpoint over a template: bindings are flat `binding` inputs (th
       ),
       ttl,
     );
-    // the synthesized Source action references the flat nodes
+    // the endpoint keeps the flat node; the synthesized Source action, like
+    // core's, states the input again under its own contract IRI
     assert(
       ttl.includes("ik:input <urn:ikigai:endpoint:echo:input:msg>"),
+      ttl,
+    );
+    assert(
+      /ik:input <urn:ikigai:contract:echo:source:b3:[0-9a-f]{64}:input:msg>/
+        .test(ttl),
       ttl,
     );
     const text = (await k.meta("urn:ts:echo:x", "text/plain")).text;
