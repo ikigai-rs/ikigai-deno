@@ -1,9 +1,13 @@
 /**
- * The doors `contract_vectors.json` was computed for, built through the
- * PUBLIC API. Shared by `contract_test.ts` and the regeneration procedure:
- * run as a script it prints `[{case, description}]` (each door's JSON Meta
- * face), which `contract_vectors.rs`, built against a released ikigai-core,
- * turns into the vectors. See that file's header for the exact commands.
+ * This package's own doors in the shared contract vectors, built through the
+ * PUBLIC API. `contract_vectors.json` (a verbatim copy of ikigai-core's) carries
+ * each as `deno/<name>`, with its JSON Meta face as `description`, and
+ * `contract_test.ts` checks that these still build exactly those descriptions.
+ *
+ * Changing a door here means changing its `description` in core's
+ * `crates/ikigai-vocab/tests/vectors/contract_cases.json`, regenerating there,
+ * and copying the file back. Run as a script, this prints
+ * `[{case, description}]`, the faces to paste.
  *
  * The cases cover every field core's canonical contract form feeds, plus the
  * places a TypeScript port could plausibly diverge: declaration order that

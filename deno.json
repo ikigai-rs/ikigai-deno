@@ -22,6 +22,11 @@
   "exclude": [
     "examples/tictactoe_static/"
   ],
+  "fmt": {
+    "exclude": [
+      "tests/contract_vectors.json"
+    ]
+  },
   "tasks": {
     "fmt-check": "deno fmt --check",
     "lint": "deno lint",
