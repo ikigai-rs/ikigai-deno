@@ -74,14 +74,8 @@
 
 import { type Client, connect, ConnectionLost } from "../src/client.ts";
 import {
-  ConflictError,
-  DeniedError,
   EndpointError,
-  InvalidArgumentError,
   MissingArgumentError,
-  NotFoundError,
-  TimeoutError,
-  UnavailableError,
   UnresolvedError,
 } from "../src/wire.ts";
 import { httpStatus } from "./http_status.ts";
@@ -427,36 +421,11 @@ export async function reply(game: Game, write: string): Promise<string> {
     message = await game.write(write);
   } catch (e) {
     if (!(e instanceof EndpointError)) throw e;
-    message = rustDisplay(e);
+    // Rust's Display, which is what the Rust view shows: it catches the
+    // refusal inside the host. `message` alone drops the variant's prefix.
+    message = e.display();
   }
   return game.resolve(`${GAME}view:reply`, { message });
-}
-
-/**
- * An error's text as the Rust kernel's `Display` prints it — what the Rust
- * view shows, since it catches the refusal inside the host. The typed
- * errors' `message` already matches for the argument and resolution variants;
- * the others carry the bare message, so the variant's prefix goes back on.
- */
-export function rustDisplay(e: EndpointError): string {
-  if (
-    e instanceof InvalidArgumentError || e instanceof MissingArgumentError ||
-    e instanceof UnresolvedError
-  ) {
-    return e.message;
-  }
-  const prefix = e instanceof DeniedError
-    ? "denied"
-    : e instanceof NotFoundError
-    ? "not found"
-    : e instanceof TimeoutError
-    ? "timeout"
-    : e instanceof UnavailableError
-    ? "unavailable"
-    : e instanceof ConflictError
-    ? "conflict"
-    : "endpoint error";
-  return `${prefix}: ${e.message}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -754,7 +723,7 @@ export function handler(
           if (request.method === "PATCH") {
             return text(415, "no patch strategy for this Content-Type");
           }
-          return text(404, rustDisplay(new UnresolvedError(at.iri)));
+          return text(404, new UnresolvedError(at.iri).display());
         }
       }
       if (verb !== declared) return text(405, "method not allowed", allow);
@@ -785,7 +754,7 @@ export function handler(
       if (!(e instanceof EndpointError)) throw e;
       // The game is in the path, so a game the host does not serve is the caller's 404.
       const code = e instanceof UnresolvedError ? 404 : httpStatus(e);
-      return text(code, rustDisplay(e));
+      return text(code, e.display());
     }
   };
 }

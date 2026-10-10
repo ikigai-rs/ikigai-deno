@@ -453,6 +453,106 @@ Deno.test("typed errors render the Rust kernel's message texts", () => {
   );
 });
 
+// What `display()` must print for each variant: `impl fmt::Display for Error`
+// in ikigai-core's crates/ikigai-core/src/error.rs, reached through
+// ikigai-wire's `impl From<WireError> for ikigai_core::Error` (a one-to-one
+// mapping for every variant here). `message` stays bare; only display() adds
+// the variant's prefix, so the wire never carries it twice.
+const RUST_DISPLAY: [wire.WireFailure, string, string][] = [
+  [
+    { kind: "unresolved", iri: "urn:x:y" },
+    "no endpoint resolved for urn:x:y",
+    "no endpoint resolved for urn:x:y",
+  ],
+  [
+    { kind: "missingArgument", name: "in" },
+    "missing required argument `in`",
+    "missing required argument `in`",
+  ],
+  [
+    { kind: "invalidArgument", name: "n", detail: "not a number" },
+    "invalid argument `n`: not a number",
+    "invalid argument `n`: not a number",
+  ],
+  [{ kind: "endpoint", message: "boom" }, "boom", "endpoint error: boom"],
+  [
+    { kind: "denied", message: "needs urn:cap:x" },
+    "needs urn:cap:x",
+    "denied: needs urn:cap:x",
+  ],
+  [
+    { kind: "notFound", message: "no such row" },
+    "no such row",
+    "not found: no such row",
+  ],
+  [
+    { kind: "timeout", message: "5s elapsed" },
+    "5s elapsed",
+    "timeout: 5s elapsed",
+  ],
+  [
+    { kind: "unavailable", message: "connection refused" },
+    "connection refused",
+    "unavailable: connection refused",
+  ],
+  [
+    { kind: "conflict", message: "square taken" },
+    "square taken",
+    "conflict: square taken",
+  ],
+];
+
+Deno.test("display() renders each variant as Rust's Error Display; message stays bare", () => {
+  for (const [failure, message, display] of RUST_DISPLAY) {
+    // Through the codec, so the form is pinned on what actually crossed.
+    const decoded = wire.decodeReply(
+      wire.encodeReply({ kind: "errorTyped", failure }),
+    );
+    assert(decoded.kind === "errorTyped");
+    const error = typedError(decoded.failure);
+    assertStrictEquals(error.message, message, `message: ${failure.kind}`);
+    assertStrictEquals(error.display(), display, `display: ${failure.kind}`);
+    // The wire carries the bare message, so the prefix is never doubled.
+    assertEquals(toWireFailure(error), failure);
+  }
+});
+
+Deno.test("display() on the byte-exact reference vectors the three suites share", () => {
+  const shown = (bytes: Uint8Array) => {
+    const decoded = wire.decodeReply(bytes);
+    assert(decoded.kind === "errorTyped");
+    return typedError(decoded.failure).display();
+  };
+  assertStrictEquals(shown(b([0x05, 0x04, 0x01, 0x78])), "denied: x");
+  assertStrictEquals(shown(b([0x05, 0x08, 0x01, 0x78])), "conflict: x");
+  assertStrictEquals(
+    shown(b([0x05], [0x02], [0x01], "n", [0x0c], "not a number")),
+    "invalid argument `n`: not a number",
+  );
+  // Conflict downgraded for a v7 peer is Endpoint("conflict: x"), which a v7
+  // Rust client prints as `endpoint error: conflict: x` — and so does this.
+  const downgraded = wire.replyForPeer({
+    kind: "errorTyped",
+    failure: { kind: "conflict", message: "x" },
+  }, 7);
+  assert(downgraded.kind === "errorTyped");
+  assertStrictEquals(
+    typedError(downgraded.failure).display(),
+    "endpoint error: conflict: x",
+  );
+});
+
+Deno.test("display() on a subclass a handler throws directly", () => {
+  // Constructed by hand rather than decoded: the same forms, since display()
+  // lives on the class and not on the decode path.
+  assertStrictEquals(new DeniedError("x").display(), "denied: x");
+  assertStrictEquals(new EndpointError("x").display(), "endpoint error: x");
+  assertStrictEquals(
+    new UnresolvedError("urn:a:b").display(),
+    "no endpoint resolved for urn:a:b",
+  );
+});
+
 Deno.test("a plain thrown error degrades to the endpoint variant", () => {
   // The server-side fallback mirrors Rust's unknown-variant degrade:
   // message preserved, taxonomy honest (it IS an endpoint failure).
