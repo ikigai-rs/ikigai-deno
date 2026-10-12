@@ -75,10 +75,26 @@ function percentEncode(s: string, encode: (cp: number) => boolean): string {
 /**
  * Core's `escape_iri_fragment`: percent-encode exactly what a Turtle
  * `IRIREF` cannot carry, leaving `%` alone (so it is NOT injective). Used for
- * the endpoint and input node IRIs, as `ikigai_vocab::to_turtle` does.
+ * an AUTHORED IRI (a `class`, a capability scope), whose escapes are real, as
+ * `ikigai_vocab`'s `iri_term` does; a NAME goes through {@linkcode nameFragment}.
  */
 export function escapeIriFragment(s: string): string {
   return percentEncode(s, isIriForbidden);
+}
+
+/**
+ * Core's `name_fragment` (`ikigai_vocab`, ikigai-core PR 187): encode a NAME
+ * (an endpoint id, an input name) for an IRI position, `%` as `%25` and then
+ * {@linkcode escapeIriFragment}. A name is not an authored IRI, so a `%` in it
+ * is a character, never the start of an escape: left alone, `100% sure`
+ * emitted `100%%20sure`, which no parser accepts, and the whole Turtle Meta
+ * document was refused (ledger #1345). The endpoint and input nodes are then
+ * spelled as a contract IRI spells the id, and the encoding is injective.
+ *
+ * Not exported from the package: core's is private too.
+ */
+export function nameFragment(s: string): string {
+  return escapeIriFragment(s.replaceAll("%", "%25"));
 }
 
 /** Core's injective segment encoding: `%` too, plus the `IRIREF` set. */

@@ -37,7 +37,9 @@ import {
   escapeIriFragment,
   MATCH_PREFIX,
   matchIri,
+  nameFragment,
 } from "../src/contract.ts";
+import { isAbsoluteIri } from "../src/iri.ts";
 import { type Reply, Verb } from "../src/wire.ts";
 import { CASES } from "./contract_cases.ts";
 
@@ -204,6 +206,32 @@ Deno.test("doors: the Turtle Meta face is core's to_turtle, byte for byte", () =
       door.name,
     );
   }
+});
+
+Deno.test("doors: every IRI this face writes in a door's Turtle parses", () => {
+  // Core dropped KNOWN_UNPARSEABLE (ikigai-core PR 187, ledger #1345): every
+  // door must parse. Checked here on what THIS face emits, with the oxiri
+  // mirror, so a name encoding that regresses fails even before a vector moves.
+  for (const door of VECTORS.doors) {
+    const ttl = new VectorDoor(door.pattern, door.description)
+      .descriptionTurtle();
+    // String literals first: a hostile literal may hold `<…>` text.
+    const bare = ttl.replaceAll(/"(?:[^"\\]|\\.)*"/g, '""');
+    const iris = Array.from(bare.matchAll(/<([^>]*)>/g), (m) => m[1]);
+    assert(iris.length > 0, door.name);
+    for (const iri of iris) {
+      assert(isAbsoluteIri(iri), `${door.name}: <${iri}>`);
+    }
+  }
+});
+
+Deno.test("nameFragment is core's name_fragment: % as %25, then the IRIREF set", () => {
+  assertStrictEquals(nameFragment("100% sure"), "100%25%20sure");
+  assertStrictEquals(nameFragment("rate%25"), "rate%2525");
+  assertStrictEquals(nameFragment("plain"), "plain");
+  // An authored IRI keeps its escapes; a name never does.
+  assertStrictEquals(escapeIriFragment("urn:cls:a%20b"), "urn:cls:a%20b");
+  assertNotEquals(nameFragment("a%41"), nameFragment("aA"));
 });
 
 Deno.test("doors: matchIri and contractIri are core's on every action", () => {

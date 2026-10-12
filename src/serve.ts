@@ -83,7 +83,7 @@ import {
   verbName,
 } from "./wire.ts";
 import { UriTemplate } from "./template.ts";
-import { contractIri, escapeIriFragment } from "./contract.ts";
+import { contractIri, escapeIriFragment, nameFragment } from "./contract.ts";
 import { isAbsoluteIri } from "./iri.ts";
 
 export { TemplateError, UriTemplate } from "./template.ts";
@@ -359,8 +359,11 @@ function descriptionTurtle(d: DescriptionModel): string {
   // capability scope) is percent-encoded so it cannot close the `<…>` early,
   // and emitted as a resource only when the encoded form parses as an IRI
   // (`Iri::parse`, oxiri); anything else degrades to a literal of the author's
-  // text. Encoding alone is not enough: `http://a> . <b` encodes to a legal
-  // IRIREF whose "port" is not a number, which would fail the whole document.
+  // text. Encoding alone is not enough: `http://ok> . <urn:z` encodes to a
+  // legal IRIREF whose port (`z`) is not a number, which would fail the whole
+  // document. `%` is left alone here, unlike in a name (`nameFragment`): an
+  // authored IRI may carry real escapes, and a malformed one (`100%`) fails
+  // the parse and degrades to a literal.
   const iriTerm = (s: string): string => {
     const escaped = escapeIriFragment(s);
     return isAbsoluteIri(escaped) ? `<${escaped}>` : lit(s);
@@ -384,7 +387,7 @@ function descriptionTurtle(d: DescriptionModel): string {
     return node;
   };
 
-  const endpointIri = `urn:ikigai:endpoint:${escapeIriFragment(d.id)}`;
+  const endpointIri = `urn:ikigai:endpoint:${nameFragment(d.id)}`;
   const preds: string[] = ["a ik:Endpoint", `ik:id ${lit(d.id)}`];
   if (d.title) preds.push(`ik:title ${lit(d.title)}`);
   if (d.summary) preds.push(`ik:summary ${lit(d.summary)}`);
@@ -400,7 +403,7 @@ function descriptionTurtle(d: DescriptionModel): string {
 
   const extraNodes: string[] = [];
   for (const arg of d.inputs) {
-    const nodeIri = `${endpointIri}:input:${escapeIriFragment(arg.name)}`;
+    const nodeIri = `${endpointIri}:input:${nameFragment(arg.name)}`;
     preds.push(`ik:input <${nodeIri}>`);
     extraNodes.push(`<${nodeIri}> ${inputPredicates(arg)} .`);
   }
@@ -418,7 +421,7 @@ function descriptionTurtle(d: DescriptionModel): string {
       actionPreds.push(`ik:requires ${capTerm(cap)}`);
     }
     for (const arg of action.inputs) {
-      const nodeIri = `${actionIri}:input:${escapeIriFragment(arg.name)}`;
+      const nodeIri = `${actionIri}:input:${nameFragment(arg.name)}`;
       extraNodes.push(`<${nodeIri}> ${inputPredicates(arg)} .`);
       actionPreds.push(`ik:input <${nodeIri}>`);
     }
