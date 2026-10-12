@@ -40,6 +40,7 @@
 
 /** Refused template text — `ikigai_core::TemplateError`, same wording. */
 export class TemplateError extends Error {
+  /** The message is `invalid URI template: {detail}`, as core prints it. */
   constructor(detail: string) {
     super(`invalid URI template: ${detail}`);
     this.name = "TemplateError";
@@ -52,7 +53,24 @@ type Part =
 
 const VAR_NAME = /^[A-Za-z0-9_]+$/;
 
+/**
+ * A parsed template under the rule above. Build one with
+ * {@linkcode UriTemplate.parse}, which refuses a malformed template with a
+ * {@linkcode TemplateError}; there is no public constructor.
+ *
+ * ```ts
+ * import { assertEquals, assertThrows } from "@std/assert";
+ * import { TemplateError, UriTemplate } from "./template.ts";
+ *
+ * const t = UriTemplate.parse("urn:r:{id}:data");
+ * assertEquals(t.match("urn:r:a:data"), { id: "a" });
+ * assertEquals(t.match("urn:r:a:data:data"), null); // lazy, no backtracking
+ * assertEquals(t.expand({ id: "b" }), "urn:r:b:data");
+ * assertThrows(() => UriTemplate.parse("urn:{a}{b}"), TemplateError);
+ * ```
+ */
 export class UriTemplate {
+  /** The template text exactly as parsed. */
   readonly source: string;
   readonly #parts: readonly Part[];
 
@@ -148,6 +166,7 @@ export class UriTemplate {
     return pos === iri.length ? bindings : null;
   }
 
+  /** The template text, {@linkcode UriTemplate.source}. */
   toString(): string {
     return this.source;
   }

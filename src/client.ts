@@ -74,6 +74,11 @@ export function defaultSocketPath(): string {
 /** What an argument may be passed as. */
 export type ArgValue = string | number | boolean | Uint8Array | ArgRef;
 
+/**
+ * A call's named arguments. Each value is coerced with {@linkcode coerceArg}
+ * before it is sent, and the names go out sorted, whatever the key order
+ * here.
+ */
 export type Args = Record<string, ArgValue>;
 
 /**
@@ -89,6 +94,12 @@ export function coerceArg(value: ArgValue): ArgRef {
   return value;
 }
 
+/**
+ * The `Request` a call sends: `verb` at `iri`, with every argument coerced
+ * by {@linkcode coerceArg}. It builds and does not check: whether the
+ * arguments suit the endpoint is the server's question, answered by a typed
+ * error.
+ */
 export function buildRequest(verb: Verb, iri: string, args: Args): Request {
   const coerced: Record<string, ArgRef> = {};
   for (const [name, value] of Object.entries(args)) {
@@ -110,6 +121,7 @@ function throwFailure(reply: Reply): void {
   }
 }
 
+/** How {@linkcode connect} dials; every field is optional. */
 export interface ConnectOptions {
   /**
    * When set, requests go as `Call::IssueAs` under this capability (which
@@ -152,6 +164,12 @@ export class Client {
    */
   capability: Capability | null;
 
+  /**
+   * Adopt a connection whose hello is ALREADY done; `stream` must own
+   * `conn`'s read side. Prefer {@linkcode connect}, which dials, says hello
+   * and passes `path`: a client built here without `options.path` never
+   * redials, so the first lost connection ends it.
+   */
   constructor(
     conn: Deno.UnixConn,
     stream: FrameStream,
@@ -402,6 +420,10 @@ export class Client {
 
   // -- lifecycle ---------------------------------------------------------
 
+  /**
+   * Close the connection. Idempotent, and final: a closed client does not
+   * redial, and every later call throws {@linkcode ConnectionLost}.
+   */
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
@@ -412,11 +434,13 @@ export class Client {
     }
   }
 
+  /** {@linkcode Client.close}, for `await using k = await connect()`. */
   [Symbol.asyncDispose](): Promise<void> {
     this.close();
     return Promise.resolve();
   }
 
+  /** {@linkcode Client.close}, for `using`. */
   [Symbol.dispose](): void {
     this.close();
   }

@@ -88,6 +88,7 @@ import { isAbsoluteIri } from "./iri.ts";
 
 export { TemplateError, UriTemplate } from "./template.ts";
 
+/** The `ik:` vocabulary namespace the Turtle Meta face writes against. */
 export const VOCAB_NS = "https://ikigai-rs.dev/ns#";
 
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
@@ -101,12 +102,20 @@ export type InputSource = "argument" | "binding";
 
 /** The spec-object form an argument declaration may take. */
 export interface ArgSpecInput {
+  /** The argument's name: the `key` a caller writes as `key=value`. */
   name: string;
+  /** One line on what the argument is for. */
   summary?: string;
+  /**
+   * Defaults to `true`, but is forced to `false` whenever `default` is set
+   * (as in Rust): an argument with a default is never required.
+   */
   required?: boolean;
   /** rdfs:Class IRI for entities, XSD datatype IRI for scalars. */
   class?: string;
+  /** The value the handler receives when the caller sends none. */
   default?: string;
+  /** The allowed values, when the argument is an enumeration. */
   oneOf?: string[];
   /** `"argument"` (the default) or `"binding"`. */
   source?: InputSource;
@@ -118,14 +127,26 @@ export interface ArgSpecInput {
  * and required/optional flags are load-bearing, not decoration.
  */
 export class ArgSpec {
+  /** The argument's name. */
   readonly name: string;
+  /** Its one-line summary; `""` when none was given. */
   readonly summary: string;
+  /** Whether a call must send it; always `false` when it has a default. */
   readonly required: boolean;
+  /** Its `class` IRI, or `null`; serialized as `class`. */
   readonly cls: string | null;
+  /** Its default value, or `null` for none. */
   readonly default: string | null;
+  /** Its allowed values; empty when it is not an enumeration. */
   readonly oneOf: readonly string[];
+  /** Whether the value is sent as an argument or bound from the IRI. */
   readonly source: InputSource;
 
+  /**
+   * From a bare name (a required `argument` with no summary), a spec object,
+   * or another `ArgSpec` (copied as is). A spec object with a `default` is
+   * optional even when it says `required: true`.
+   */
   constructor(spec: string | ArgSpecInput | ArgSpec) {
     if (spec instanceof ArgSpec) {
       this.name = spec.name;
@@ -176,6 +197,7 @@ export class ArgSpec {
  * of the IRI, so it is never absent and has no default.
  */
 export interface BindingSpecInput {
+  /** One line on what the variable names. */
   summary?: string;
   /** rdfs:Class IRI for entities, XSD datatype IRI for scalars. */
   class?: string;
@@ -194,6 +216,14 @@ export type HandlerResult =
  */
 export type HandlerArgs = Record<string, string | Uint8Array>;
 
+/**
+ * The function behind a verb. A thrown typed error (`NotFoundError`,
+ * `DeniedError`, …) crosses the wire as that variant; anything else thrown
+ * crosses as an `Endpoint` failure with its message. A string or bytes
+ * result is sent with the declared output media type, a
+ * `[value, mediaType]` pair with its own, and a `Representation` as built,
+ * except that a Sink or Delete answer is always made uncacheable.
+ */
 export type Handler = (
   args: HandlerArgs,
 ) => HandlerResult | Promise<HandlerResult>;
@@ -209,21 +239,42 @@ export type ExistsHandler = (
 
 /** `ikigai_core::ActionSpec`: one verb's contract. */
 export interface ActionSpecModel {
+  /** The verb this contract is for (never Meta). */
   readonly verb: Verb;
+  /** What the verb does here; `""` when undeclared. */
   readonly summary: string;
+  /**
+   * ALL of this verb's inputs: an explicit action inherits nothing from the
+   * flat fields, so the template's bindings are listed here too.
+   */
   readonly inputs: readonly ArgSpec[];
+  /** The media types the verb answers with. */
   readonly outputs: readonly string[];
+  /**
+   * The capability scopes the verb requires. Declared here, they REPLACE
+   * the flat `requires` for this verb rather than adding to it.
+   */
   readonly requires: readonly string[];
 }
 
 /** `ikigai_core::Description`, the fields this peer emits. */
 export interface DescriptionModel {
+  /** The endpoint's id: the name its catalog entries point at. */
   readonly id: string;
+  /** A short human title; `""` when none was given. */
   readonly title: string;
+  /** One line on what the endpoint does; `""` when none was given. */
   readonly summary: string;
+  /** The verbs it answers, Meta included. */
   readonly verbs: readonly Verb[];
+  /**
+   * The flat inputs, which apply to every verb with no explicit action;
+   * empty for a {@linkcode Family}, whose inputs live on its actions.
+   */
   readonly inputs: readonly ArgSpec[];
+  /** The flat output media types; empty for a {@linkcode Family}. */
   readonly outputs: readonly string[];
+  /** The flat required capability scopes; empty for a {@linkcode Family}. */
   readonly requires: readonly string[];
   /** Explicit per-verb contracts; empty for the flat single-verb form. */
   readonly actions: readonly ActionSpecModel[];
@@ -586,14 +637,28 @@ function booleanReply(value: boolean, cacheable: boolean): Reply {
 export abstract class ServedDef {
   /** The declared pattern — an exact IRI, or a URI template. */
   readonly iri: string;
+  /** {@linkcode ServedDef.iri} parsed; an exact IRI is a template too. */
   readonly template: UriTemplate;
+  /**
+   * The endpoint id the catalog lists. Defaults to the pattern's last plain
+   * `:`-segment (`urn:ts:stored:{x}:{y}` is `stored`); a flat endpoint
+   * prefers its handler's function name when it has one.
+   */
   readonly id: string;
+  /** A short human title; `""` when none was given. */
   readonly title: string;
+  /** One line on what the door does; `""` when none was given. */
   readonly summary: string;
   /** One required `binding` input per template variable (empty if exact). */
   readonly bindings: readonly ArgSpec[];
   readonly #aliasTemplate: UriTemplate | null;
 
+  /**
+   * Validates the declaration, so a bad one fails where it is written: `iri`
+   * must be a `urn:` and a valid {@linkcode UriTemplate}, and `bindings` may
+   * describe only variables the template has. `fallbackId` is the id used
+   * when `options.id` is absent.
+   */
   protected constructor(
     iri: string,
     options: {
@@ -655,6 +720,10 @@ export abstract class ServedDef {
   /** The verbs this door answers, for a refusal that names them. */
   protected abstract answeredVerbs(): Verb[];
 
+  /**
+   * The typed `Endpoint` refusal for a verb this door does not answer; its
+   * message names the verbs it does.
+   */
   protected refuse(verb: Verb): Reply {
     return {
       kind: "errorTyped",
@@ -689,30 +758,57 @@ export abstract class ServedDef {
 // The flat form: one verb, one function
 // ---------------------------------------------------------------------------
 
+/** How {@linkcode endpoint} declares a single-verb Source door. */
 export interface EndpointOptions {
+  /**
+   * The catalog id. Default: the handler's function name, else the IRI's
+   * last plain `:`-segment.
+   */
   id?: string;
+  /** A short human title. */
   title?: string;
+  /** One line on what the endpoint does. */
   summary?: string;
+  /**
+   * The by-value arguments, as names, spec objects or `ArgSpec`s. None may
+   * reuse a template variable's name, or declare `source: "binding"`: both
+   * are refused at declaration.
+   */
   args?: (string | ArgSpecInput | ArgSpec)[];
   /** Descriptions of the template's variables, when the IRI is a template. */
   bindings?: Record<string, BindingSpecInput>;
+  /** The media type a plain result is sent as; `text/plain;charset=utf-8`. */
   output?: string;
   /**
    * Marks the result a pure function of its inputs (`Expiry::Never`) — the
    * HOST kernel then caches it.
    */
   cacheable?: boolean;
+  /**
+   * The capability scopes the endpoint declares. Described, not enforced:
+   * this server accepts a call's capability without checking it per scope.
+   */
   requires?: string[];
 }
 
 /** A served single-verb Source endpoint: a handler plus its self-description. */
 export class EndpointDef extends ServedDef {
+  /** The function that answers Source. */
   readonly handler: Handler;
+  /** The declared by-value arguments (the template's bindings are separate). */
   readonly args: readonly ArgSpec[];
+  /** The media type a plain result is sent as. */
   readonly output: string;
+  /** Whether a result is marked `Expiry::Never` for the host to cache. */
   readonly cacheable: boolean;
+  /** The declared capability scopes (described, not enforced here). */
   readonly requires: readonly string[];
 
+  /**
+   * Prefer {@linkcode endpoint}, which takes the same values in reading
+   * order. Throws when the declaration is invalid (see
+   * {@linkcode EndpointOptions.args}).
+   */
   constructor(handler: Handler, iri: string, options: EndpointOptions = {}) {
     // TS erases names more readily than Python (an inline arrow has none),
     // so the default id is the IRI's last plain segment, not the function
@@ -726,6 +822,10 @@ export class EndpointDef extends ServedDef {
     this.requires = [...(options.requires ?? [])];
   }
 
+  /**
+   * The flat single-verb form: verbs Source and Meta, the bindings then the
+   * args as inputs, and no explicit actions.
+   */
   description(): DescriptionModel {
     return {
       id: this.id,
@@ -739,10 +839,15 @@ export class EndpointDef extends ServedDef {
     };
   }
 
+  /** Source, Exists and Meta: Exists is answered though not described. */
   protected answeredVerbs(): Verb[] {
     return [Verb.Source, Verb.Exists, Verb.Meta];
   }
 
+  /**
+   * Source runs the handler. Exists is always `true` (the name is bound)
+   * and never runs the handler. Sink and Delete get a typed refusal.
+   */
   async answer(
     request: Request,
     bindings: Readonly<Record<string, string>>,
@@ -790,9 +895,11 @@ export function endpoint(
 
 /** One verb's contract, as a {@linkcode Family} declares it. */
 export interface ActionOptions {
+  /** One line on what this verb does here. */
   summary?: string;
   /** By-value arguments (the template's variables are added for you). */
   args?: (string | ArgSpecInput | ArgSpec)[];
+  /** The media type a plain result is sent as; `text/plain;charset=utf-8`. */
   output?: string;
   /** Capability scopes this verb requires (declared per verb, as in core). */
   requires?: string[];
@@ -809,12 +916,17 @@ export interface SourceOptions extends ActionOptions {
 
 /** An explicit Exists answers yes/no; its output is always text/plain. */
 export interface ExistsOptions extends Omit<ActionOptions, "output"> {
+  /** Mark the yes/no answer `Expiry::Never`, for the host to cache. */
   cacheable?: boolean;
 }
 
+/** How {@linkcode family} declares a multi-verb door. */
 export interface FamilyOptions {
+  /** The catalog id; default: the pattern's last plain `:`-segment. */
   id?: string;
+  /** A short human title. */
   title?: string;
+  /** One line on what the door does. */
   summary?: string;
   /** Descriptions of the template's variables. */
   bindings?: Record<string, BindingSpecInput>;
@@ -867,12 +979,20 @@ const VERB_ORDER = [Verb.Source, Verb.Sink, Verb.Exists, Verb.Delete];
 export class Family extends ServedDef {
   readonly #actions = new Map<Verb, ActionDef>();
 
+  /**
+   * Prefer {@linkcode family}, which is the same call. Until a verb is
+   * declared, the door answers Meta and refuses everything else.
+   */
   constructor(pattern: string, options: FamilyOptions = {}) {
     super(pattern, options, defaultId(pattern));
   }
 
   /** Declare the Source verb. */
   source(handler: Handler): this;
+  /**
+   * Declare the Source verb with its contract. Each verb may be declared
+   * once; a second declaration throws.
+   */
   source(options: SourceOptions, handler: Handler): this;
   source(a: SourceOptions | Handler, b?: Handler): this {
     const [options, handler] = typeof a === "function" ? [{}, a] : [a, b!];
@@ -881,6 +1001,10 @@ export class Family extends ServedDef {
 
   /** Declare the Sink verb; the body arrives as `content`. */
   sink(handler: Handler): this;
+  /**
+   * Declare the Sink verb with its contract. `content` is added to `args`,
+   * required, unless already declared there; the answer is never cacheable.
+   */
   sink(options: ActionOptions, handler: Handler): this;
   sink(a: ActionOptions | Handler, b?: Handler): this {
     const [options, handler] = typeof a === "function" ? [{}, a] : [a, b!];
@@ -893,6 +1017,7 @@ export class Family extends ServedDef {
 
   /** Declare the Delete verb. */
   delete(handler: Handler): this;
+  /** Declare the Delete verb with its contract; never cacheable. */
   delete(options: ActionOptions, handler: Handler): this;
   delete(a: ActionOptions | Handler, b?: Handler): this {
     const [options, handler] = typeof a === "function" ? [{}, a] : [a, b!];
@@ -901,6 +1026,10 @@ export class Family extends ServedDef {
 
   /** Declare an explicit Exists (else it is derived from Source). */
   exists(handler: ExistsHandler): this;
+  /**
+   * Declare an explicit Exists with its contract; its answer is always
+   * `text/plain;charset=utf-8` `true` or `false`.
+   */
   exists(options: ExistsOptions, handler: ExistsHandler): this;
   exists(a: ExistsOptions | ExistsHandler, b?: ExistsHandler): this {
     const [options, handler] = typeof a === "function" ? [{}, a] : [a, b!];
@@ -944,6 +1073,11 @@ export class Family extends ServedDef {
     return VERB_ORDER.filter((v) => this.#actions.has(v));
   }
 
+  /**
+   * The explicit per-verb form: one action per declared verb, each carrying
+   * the bindings then its own args, and empty flat fields. A derived Exists
+   * is answered but not listed.
+   */
   description(): DescriptionModel {
     const verbs = this.verbs;
     return {
@@ -969,6 +1103,7 @@ export class Family extends ServedDef {
     };
   }
 
+  /** The declared verbs, plus Exists when it derives from Source, plus Meta. */
   protected answeredVerbs(): Verb[] {
     const verbs = this.verbs;
     if (!verbs.includes(Verb.Exists) && verbs.includes(Verb.Source)) {
@@ -977,6 +1112,10 @@ export class Family extends ServedDef {
     return [...VERB_ORDER.filter((v) => verbs.includes(v)), Verb.Meta];
   }
 
+  /**
+   * Run the declared verb's handler, or derive Exists from Source as the
+   * class doc describes; an undeclared verb gets a typed refusal.
+   */
   async answer(
     request: Request,
     bindings: Readonly<Record<string, string>>,
@@ -1091,11 +1230,20 @@ function route(routes: Route[], template: UriTemplate, def: ServedDef): void {
  * door answers a verbatim caller, the stripped one an alias-mode connection.
  */
 export class Space {
+  /**
+   * The entries form for a caller that states none (`entries(null)`):
+   * `true`, the default, lists alias-stripped patterns. A served
+   * connection always states its own form.
+   */
   readonly stripAlias: boolean;
   #defs: readonly ServedDef[];
   #declared: readonly Route[];
   #aliased: readonly Route[];
 
+  /**
+   * Routes `endpoints` in the order given, which is the order they win in.
+   * Throws when two doors share a pattern within one form.
+   */
   constructor(
     endpoints: readonly ServedDef[],
     options: { stripAlias?: boolean } = {},
@@ -1127,6 +1275,15 @@ export class Space {
     );
   }
 
+  /**
+   * Answer one decoded Call. Failures come back as typed replies: an
+   * unmatched target is `unresolved`, a handler's throw is its taxonomy
+   * variant. Meta answers for any matched IRI before a handler sees it.
+   * `isCached` is always `false` (this peer keeps no cache); `issueAs` is
+   * resolved like `issue`, its capability not checked; a resolved
+   * `issueTraced` carries one span for the whole resolution.
+   * `stripAlias` is the connection's hello mode, `null` for a direct call.
+   */
   async dispatch(
     call: wire.Call,
     stripAlias: boolean | null = null,
@@ -1259,12 +1416,19 @@ export class Space {
  * `await using`).
  */
 export class Server {
+  /** The routing space built from the endpoints. */
   readonly space: Space;
+  /** The Unix socket path the server listens on. */
   readonly path: string;
   #listener: Deno.UnixListener;
   #conns = new Set<Deno.UnixConn>();
   #closing = false;
 
+  /**
+   * Bind now, before {@linkcode Server.serve}: creates the parent directory
+   * (`0700`) if missing, REMOVES any file already at `path`, listens, and
+   * narrows the socket to `0600`, which is this server's whole access gate.
+   */
   constructor(endpoints: readonly ServedDef[], path: string) {
     this.space = new Space(endpoints);
     this.path = path;
@@ -1402,6 +1566,10 @@ export class Server {
     return true;
   }
 
+  /**
+   * Stop listening and close every open connection, which ends
+   * {@linkcode Server.serve}. Idempotent.
+   */
   shutdown(): void {
     if (this.#closing) return;
     this.#closing = true;
@@ -1421,6 +1589,7 @@ export class Server {
     }
   }
 
+  /** {@linkcode Server.shutdown}, for `using`. */
   [Symbol.dispose](): void {
     this.shutdown();
   }
