@@ -51,16 +51,15 @@ import by path or URL:
 import { connect, endpoint, serve } from "./src/mod.ts";
 ```
 
-### JSR: what is exported, and why `./zod` is not yet
+### JSR: what is exported, and why `./zod` is not
 
 The published surface is exactly four entrypoints — `.` (`src/mod.ts`),
-`./wire`, `./client` and `./serve`. **`./zod` is deliberately left out of
-`exports`** (ledger #1350): its signatures name zod's own types, which
-`deno doc --lint` reports as `private-type-ref`, and whether an entrypoint with
-that shape belongs in the package is Brian's call on that item. The file stays
-in the tree and is importable **by path** (`./src/zod.ts`) meanwhile, so the
-`zod → ArgSpec` rung below keeps working — only the `@ikigai/wire/zod` specifier
-is not offered yet.
+`./wire`, `./client` and `./serve`. **`./zod` is left out of `exports` for
+good** (decided in ledger #1350): its signatures name zod's own types, which
+`deno doc --lint` reports as `private-type-ref`, so it is not part of the
+published API and no `@ikigai/wire/zod` specifier will be offered. The file
+stays in the tree and is importable **by path** (`./src/zod.ts`), so the
+`zod → ArgSpec` rung below keeps working.
 
 `deno publish --dry-run` (the `publish-check` task) is what keeps this honest:
 it walks the exports, fails on any TypeScript **slow type**, and refuses a
@@ -277,14 +276,14 @@ host's failover will treat your `UnavailableError` as transient and your
 ### zod → ArgSpec (declare the contract once)
 
 TS types are erased at runtime, so L0 ArgSpecs are explicit spec data. The zod
-module (`src/zod.ts`, imported by path until ledger #1350) closes that gap: a
+module (`src/zod.ts`, always imported by path) closes that gap: a
 `z.object(...)` is the ONE statement of the input contract — the ArgSpecs derive
 from it, the same schema validates every dispatch (before the handler), and the
 handler receives the parsed, typed output:
 
 ```ts
 import { z } from "zod";
-import { endpoint } from "./src/zod.ts"; // not @ikigai/wire/zod yet (ledger #1350)
+import { endpoint } from "./src/zod.ts"; // by path: ./zod is not an export
 
 const hello = endpoint("urn:ts:hello", {
   summary: "Greet someone",
