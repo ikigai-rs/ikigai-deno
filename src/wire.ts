@@ -108,6 +108,10 @@ const utf8Decoder = new TextDecoder();
 
 /** Base for everything this package throws on purpose. */
 export class WireError extends Error {
+  /**
+   * `name` is set to the concrete subclass's own name, so a thrown error
+   * prints as `DeniedError: …`, not `Error: …`.
+   */
   constructor(message: string) {
     super(message);
     this.name = new.target.name;
@@ -135,6 +139,11 @@ export class ProtocolError extends WireError {}
  * the grant, nor change the state that refused.
  */
 export class EndpointError extends WireError {
+  /**
+   * Whether re-issuing the same request might succeed — `false` here and on
+   * every permanent subclass; only {@linkcode TimeoutError} and
+   * {@linkcode UnavailableError} override it to `true`.
+   */
   readonly transient: boolean = false;
 
   /**
@@ -168,8 +177,13 @@ export class EndpointError extends WireError {
  * reporting the fronted thing absent.
  */
 export class UnresolvedError extends EndpointError {
+  /** The target IRI nothing was bound to — what crosses the wire. */
   readonly iri: string;
 
+  /**
+   * The message is Rust's rendering, `no endpoint resolved for {iri}`; only
+   * `iri` crosses the wire, and the receiver rebuilds the text from it.
+   */
   constructor(iri: string) {
     super(`no endpoint resolved for ${iri}`);
     this.iri = iri;
@@ -183,8 +197,13 @@ export class UnresolvedError extends EndpointError {
 
 /** A required argument was absent (`Error::MissingArgument`). */
 export class MissingArgumentError extends EndpointError {
+  /** The name of the absent argument — what crosses the wire. */
   readonly argument: string;
 
+  /**
+   * The message is Rust's rendering, ``missing required argument `{name}` ``;
+   * only the name crosses the wire, and the receiver rebuilds the text.
+   */
   constructor(argument: string) {
     super(`missing required argument \`${argument}\``);
     this.argument = argument;
@@ -198,9 +217,16 @@ export class MissingArgumentError extends EndpointError {
 
 /** An argument was present but unusable (`Error::InvalidArgument`). */
 export class InvalidArgumentError extends EndpointError {
+  /** The name of the argument that was refused. */
   readonly argument: string;
+  /** Why it was refused, in the endpoint's words. */
   readonly detail: string;
 
+  /**
+   * The message is Rust's rendering,
+   * ``invalid argument `{name}`: {detail}``; the name and the detail cross
+   * the wire as two fields, and the receiver rebuilds the text.
+   */
   constructor(argument: string, detail: string) {
     super(`invalid argument \`${argument}\`: ${detail}`);
     this.argument = argument;
@@ -262,6 +288,7 @@ export class ConflictError extends EndpointError {
  * endpoint timing out; the client's own read deadline is `ConnectionLost`.)
  */
 export class TimeoutError extends EndpointError {
+  /** Always `true`: a timeout is the transient case a retry may cure. */
   override readonly transient: boolean = true;
 
   /** Rust's Display: `timeout: {msg}`. */
@@ -275,6 +302,7 @@ export class TimeoutError extends EndpointError {
  * (`Error::Unavailable`) — **transient**, like {@linkcode TimeoutError}.
  */
 export class UnavailableError extends EndpointError {
+  /** Always `true`: an unavailable dependency may come back. */
   override readonly transient: boolean = true;
 
   /** Rust's Display: `unavailable: {msg}`. */
@@ -310,13 +338,17 @@ export function verbName(verb: Verb): string {
 
 /** `ArgRef::Reference` — an argument by IRI. */
 export interface Reference {
+  /** The discriminant: postcard variant 0 of `ArgRef`. */
   readonly kind: "reference";
+  /** The IRI the receiving kernel resolves to get the value. */
   readonly iri: string;
 }
 
 /** `ArgRef::Inline` — a small literal value carried inline. */
 export interface Inline {
+  /** The discriminant: postcard variant 1 of `ArgRef`. */
   readonly kind: "inline";
+  /** The value's bytes, as sent (text travels UTF-8 encoded). */
   readonly data: Uint8Array;
 }
 
@@ -326,16 +358,38 @@ export interface Inline {
  * `#[serde(into = "String")]`), not the raw 32-byte digest.
  */
 export interface Content {
+  /** The discriminant: postcard variant 2 of `ArgRef`. */
   readonly kind: "content";
+  /** The id in its string form, `b3:<hex>`. */
   readonly contentId: string;
 }
 
+/**
+ * `ikigai_core::ArgRef`: how one named argument travels — by IRI, inline
+ * bytes, or a content-store id. Build one with {@linkcode reference},
+ * {@linkcode inline} or {@linkcode content}.
+ */
 export type ArgRef = Reference | Inline | Content;
 
+/** An argument passed by IRI; the receiving kernel resolves it. */
 export function reference(iri: string): Reference {
   return { kind: "reference", iri };
 }
 
+/**
+ * An argument carried inline. A string is UTF-8 encoded; bytes are kept as
+ * given (not copied).
+ *
+ * ```ts
+ * import { assertEquals } from "@std/assert";
+ * import { inline } from "./wire.ts";
+ *
+ * assertEquals(inline("hi"), {
+ *   kind: "inline",
+ *   data: new Uint8Array([0x68, 0x69]),
+ * });
+ * ```
+ */
 export function inline(data: Uint8Array | string): Inline {
   return {
     kind: "inline",
@@ -343,6 +397,10 @@ export function inline(data: Uint8Array | string): Inline {
   };
 }
 
+/**
+ * An argument by content-store id. Pass the STRING form, `b3:<hex>`: that
+ * string is what crosses the wire, not the raw digest.
+ */
 export function content(contentId: string): Content {
   return { kind: "content", contentId };
 }
@@ -355,8 +413,14 @@ export function content(contentId: string): Content {
  * `BTreeMap<String, _>`).
  */
 export interface Request {
+  /** Which of the five verbs to apply. */
   readonly verb: Verb;
+  /** The IRI to resolve. */
   readonly target: string;
+  /**
+   * Named arguments. Key order here does not matter: the encoder sorts them
+   * by UTF-8 bytes, as Rust's `BTreeMap` does.
+   */
   readonly args: Record<string, ArgRef>;
 }
 
@@ -368,20 +432,30 @@ export interface Request {
  * `scopes === null` means root.
  */
 export class Capability {
+  /**
+   * The granted `urn:cap:` scopes, or `null` for root. Set order is
+   * irrelevant: the encoder sorts the scopes, as Rust's `BTreeSet` does.
+   */
   readonly scopes: ReadonlySet<string> | null;
 
   private constructor(scopes: ReadonlySet<string> | null) {
     this.scopes = scopes;
   }
 
+  /** Full authority (`Kind::Root`). */
   static root(): Capability {
     return new Capability(null);
   }
 
+  /**
+   * Authority limited to `scopes` (`Kind::Scoped`); duplicates collapse. An
+   * empty set is a real capability that grants nothing, not root.
+   */
   static scoped(scopes: Iterable<string>): Capability {
     return new Capability(new Set(scopes));
   }
 
+  /** Whether this is the root capability (`scopes === null`). */
   get isRoot(): boolean {
     return this.scopes === null;
   }
@@ -396,6 +470,24 @@ export type Expiry =
   | { readonly kind: "at"; readonly atMillis: number }
   | { readonly kind: "never" };
 
+/**
+ * Constructors for {@linkcode Expiry}: `always()` (expired as soon as made,
+ * so never served from a cache), `at(ms)` (valid until that instant), and
+ * `never()` (valid until a golden thread cuts it). `at` takes WHOLE
+ * milliseconds since the Unix epoch: Rust's `Time` is a `u64`.
+ *
+ * ```ts
+ * import { assertEquals } from "@std/assert";
+ * import { Expiry } from "./wire.ts";
+ *
+ * assertEquals(Expiry.always(), { kind: "always" });
+ * assertEquals(Expiry.at(1_700_000_000_000), {
+ *   kind: "at",
+ *   atMillis: 1_700_000_000_000,
+ * });
+ * assertEquals(Expiry.never(), { kind: "never" });
+ * ```
+ */
 export const Expiry: {
   always(): Expiry;
   at(atMillis: number): Expiry;
@@ -433,8 +525,14 @@ export class Representation {
    * `new Response(rep.data)` type-checks under TS 6.
    */
   readonly data: Uint8Array<ArrayBuffer>;
+  /** The media type without parameters, e.g. `text/plain`. */
   readonly baseMediaType: string;
+  /**
+   * The media type's parameters (`charset=utf-8` is `{ charset: "utf-8" }`).
+   * Sent sorted by key, whatever the insertion order.
+   */
   readonly params: Record<string, string>;
+  /** How long a cache may keep this; `Expiry.always()` unless given. */
   readonly expiry: Expiry;
   /**
    * How the server's cache answered (stamped by the client on receipt; not
@@ -442,6 +540,26 @@ export class Representation {
    */
   cacheStatus: CacheStatus | null = null;
 
+  /**
+   * `data` may be text (UTF-8 encoded here) or bytes. `mediaType` may carry
+   * parameters (`text/plain;charset=utf-8`): they are split off into
+   * {@linkcode Representation.params}, and `options.params` overrides any of
+   * the same name. Defaults: `text/plain`, `Expiry.always()`.
+   *
+   * ```ts
+   * import { assertEquals } from "@std/assert";
+   * import { Representation } from "./wire.ts";
+   *
+   * const rep = new Representation("hi", "text/plain; charset=utf-8", {
+   *   params: { a: "1" },
+   * });
+   * assertEquals(rep.baseMediaType, "text/plain");
+   * assertEquals(rep.params, { charset: "utf-8", a: "1" });
+   * assertEquals(rep.mediaType, "text/plain;a=1;charset=utf-8"); // sorted
+   * assertEquals(rep.text, "hi");
+   * assertEquals(rep.expiry, { kind: "always" });
+   * ```
+   */
   constructor(
     data: Uint8Array | string,
     mediaType = "text/plain",
@@ -477,6 +595,10 @@ export class Representation {
     return out;
   }
 
+  /**
+   * The bytes decoded as UTF-8, whatever the declared charset. Not strict:
+   * an invalid sequence becomes U+FFFD rather than an error.
+   */
   get text(): string {
     return utf8Decoder.decode(this.data);
   }
@@ -501,11 +623,15 @@ export class Representation {
  * remote.
  */
 export interface SpaceEntry {
+  /** The bound pattern: an exact IRI, or a URI template like `urn:x:{id}`. */
   readonly pattern: string;
+  /** The name (id) of the endpoint the pattern resolves to. */
   readonly endpoint: string;
+  /** `null` for a local binding, else the mount label it came through. */
   readonly origin: string | null;
 }
 
+/** A {@linkcode SpaceEntry}; `origin` defaults to `null` (a local binding). */
 export function spaceEntry(
   pattern: string,
   endpoint: string,
@@ -516,20 +642,52 @@ export function spaceEntry(
 
 /** `ikigai_wire::TraceContext`: trace id + optional parent span. */
 export interface TraceContext {
+  /** Identifies the overall trace this call belongs to. */
   readonly traceId: number;
+  /**
+   * The caller's span to parent the returned subtree under, or `null` for a
+   * whole-session trace (the remote root is the trace root).
+   */
   readonly parentSpan: number | null;
 }
 
 /** `ikigai_core::TraceEvent` (the v5 layout, including `notes`). */
 export interface TraceEvent {
+  /** The resolved request's target IRI. */
   readonly target: string;
+  /**
+   * The worker the invocation ran on (a scheduler thread name or thread id);
+   * a Deno server reports `deno-main`.
+   */
   readonly thread: string;
+  /**
+   * When the invocation started, in milliseconds since the Unix epoch;
+   * `null` when the kernel has no clock, and on a capability denial, which
+   * never ran.
+   */
   readonly started: number | null; // Time, millis since epoch
+  /** When it finished; `null` in the same cases as `started`. */
   readonly ended: number | null;
+  /** Whether the representation cache served it, rather than computing it. */
   readonly cacheHit: boolean;
+  /** This invocation's span id, unique within one traced resolution. */
   readonly span: number;
+  /**
+   * The span that issued this one, `null` for the root; the `(span, parent)`
+   * edges rebuild the execution tree.
+   */
   readonly parent: number | null;
+  /**
+   * The authority the invocation ran under: `null` for root, else the scope
+   * set, SORTED — so an attenuation down the call chain shows node by node.
+   */
   readonly capability: readonly string[] | null; // null = root authority
+  /**
+   * `(key, value)` facts the endpoint attached to its own span (e.g. which
+   * model an LLM facade picked); empty unless it annotated. A capability
+   * denial is noted under the key `denied` (core's `DENIED_NOTE`), with the
+   * scope the caller lacked as the value.
+   */
   readonly notes: readonly (readonly [string, string])[];
 }
 
@@ -537,6 +695,14 @@ export interface TraceEvent {
 // Calls and replies (mirroring ikigai-wire)
 // ---------------------------------------------------------------------------
 
+/**
+ * `ikigai_wire::Call`: one client → server message, mirroring the Rust
+ * `Resolver` methods. `kind` order is the postcard variant order — issue=0,
+ * isCached=1, entries=2, issueAs=3, issueTraced=4 — and is append-only.
+ * `issueAs` resolves under an explicit capability (a server clamps it to the
+ * principal the channel authenticated); `issueTraced` also records the
+ * resolution and is answered with a `resolvedTraced` {@linkcode Reply}.
+ */
 export type Call =
   | { readonly kind: "issue"; readonly request: Request }
   | { readonly kind: "isCached"; readonly request: Request }
@@ -693,6 +859,14 @@ export function replyForPeer(reply: Reply, peerVersion: number): Reply {
   return reply;
 }
 
+/**
+ * `ikigai_wire::Reply`: one server → client message. `kind` order is the
+ * postcard variant order — resolved=0, cached=1, entries=2, error=3,
+ * resolvedTraced=4, errorTyped=5 — and is append-only. A v7+ server answers
+ * every failure as `errorTyped`; pass a reply through
+ * {@linkcode replyForPeer} before encoding it for a peer older than this
+ * side.
+ */
 export type Reply =
   | {
     readonly kind: "resolved";
@@ -887,6 +1061,36 @@ function putTraceEvent(out: Writer, event: TraceEvent): void {
   }
 }
 
+/**
+ * A {@linkcode Call} as its postcard payload, UNFRAMED: wrap it with
+ * {@linkcode frame} (or {@linkcode FrameStream.writeFrame}) to send it. The
+ * bytes are the Rust encoding exactly: the variant index, then the fields in
+ * declaration order, strings and bytes as a varint length plus the raw
+ * bytes, maps and sets sorted by key.
+ *
+ * ```ts
+ * import { assertEquals } from "@std/assert";
+ * import { encodeCall, inline, Verb } from "./wire.ts";
+ *
+ * assertEquals(encodeCall({ kind: "entries" }), new Uint8Array([2]));
+ * const issue = encodeCall({
+ *   kind: "issue",
+ *   request: { verb: Verb.Source, target: "urn:x", args: { a: inline("hi") } },
+ * });
+ * assertEquals(
+ *   issue,
+ *   new Uint8Array([
+ *     0, // Call::Issue
+ *     0, // Verb::Source
+ *     5, 0x75, 0x72, 0x6e, 0x3a, 0x78, // "urn:x"
+ *     1, // one argument
+ *     1, 0x61, // "a"
+ *     1, // ArgRef::Inline
+ *     2, 0x68, 0x69, // b"hi"
+ *   ]),
+ * );
+ * ```
+ */
 export function encodeCall(call: Call): Uint8Array {
   const out = new Writer();
   switch (call.kind) {
@@ -917,6 +1121,28 @@ export function encodeCall(call: Call): Uint8Array {
   return out.finish();
 }
 
+/**
+ * A {@linkcode Reply} as its postcard payload, UNFRAMED, in the Rust
+ * encoding. It encodes what it is given: a server answering an older peer
+ * passes the reply through {@linkcode replyForPeer} first.
+ *
+ * ```ts
+ * import { assertEquals } from "@std/assert";
+ * import { encodeReply } from "./wire.ts";
+ *
+ * assertEquals(
+ *   encodeReply({ kind: "cached", cached: true }),
+ *   new Uint8Array([1, 1]),
+ * );
+ * assertEquals(
+ *   encodeReply({
+ *     kind: "errorTyped",
+ *     failure: { kind: "notFound", message: "x" },
+ *   }),
+ *   new Uint8Array([5, 5, 1, 0x78]), // ErrorTyped, NotFound, "x"
+ * );
+ * ```
+ */
 export function encodeReply(reply: Reply): Uint8Array {
   const out = new Writer();
   switch (reply.kind) {
@@ -1102,6 +1328,21 @@ function getTraceEvent(r: Reader): TraceEvent {
   };
 }
 
+/**
+ * Decode one unframed Call payload — the inverse of {@linkcode encodeCall}.
+ * The payload must be consumed EXACTLY: trailing bytes, a truncated
+ * message, or an unknown variant all throw {@linkcode ProtocolError} naming
+ * this side's protocol version.
+ *
+ * ```ts
+ * import { assertEquals, assertThrows } from "@std/assert";
+ * import { decodeCall, ProtocolError } from "./wire.ts";
+ *
+ * assertEquals(decodeCall(new Uint8Array([2])), { kind: "entries" });
+ * assertThrows(() => decodeCall(new Uint8Array([2, 0])), ProtocolError);
+ * assertThrows(() => decodeCall(new Uint8Array([9])), ProtocolError);
+ * ```
+ */
 export function decodeCall(payload: Uint8Array): Call {
   try {
     const r = new Reader(payload);
@@ -1145,6 +1386,33 @@ export function decodeCall(payload: Uint8Array): Call {
   }
 }
 
+/**
+ * Decode one unframed Reply payload — the inverse of
+ * {@linkcode encodeReply}, refusing the same way {@linkcode decodeCall}
+ * does. One exception is deliberate: an `errorTyped` failure variant NEWER
+ * than this side degrades to an `endpoint` failure that keeps its message,
+ * since the taxonomy is append-only and every variant so far leads with a
+ * string.
+ *
+ * ```ts
+ * import { assertEquals } from "@std/assert";
+ * import { decodeReply, PROTOCOL_VERSION } from "./wire.ts";
+ *
+ * assertEquals(decodeReply(new Uint8Array([1, 1])), {
+ *   kind: "cached",
+ *   cached: true,
+ * });
+ * // Failure variant 9, which no version has defined yet, carrying "x".
+ * assertEquals(decodeReply(new Uint8Array([5, 9, 1, 0x78])), {
+ *   kind: "errorTyped",
+ *   failure: {
+ *     kind: "endpoint",
+ *     message:
+ *       `wire error variant 9 (newer than protocol v${PROTOCOL_VERSION}): x`,
+ *   },
+ * });
+ * ```
+ */
 export function decodeReply(payload: Uint8Array): Reply {
   try {
     const r = new Reader(payload);
@@ -1211,14 +1479,33 @@ export enum HelloMode {
 
 /** One side's hello: `HELLO_MAGIC + u32 BE version + u8 mode`. */
 export interface Hello {
+  /** The sender's wire protocol version (a client's, or a server's answer). */
   readonly version: number;
+  /** How the dialing side addresses the connection; servers send verbatim. */
   readonly mode: HelloMode;
 }
 
+/** A {@linkcode Hello}; `mode` defaults to {@linkcode HelloMode.Verbatim}. */
 export function hello(version: number, mode = HelloMode.Verbatim): Hello {
   return { version, mode };
 }
 
+/**
+ * A hello as its 9-byte payload: {@linkcode HELLO_MAGIC}, the version as a
+ * `u32` BIG-endian, then the mode byte. Not postcard (the codec being
+ * negotiated must not be needed to negotiate it), and unframed: send it with
+ * {@linkcode frame} like any other payload.
+ *
+ * ```ts
+ * import { assertEquals } from "@std/assert";
+ * import { encodeHello, hello, HelloMode } from "./wire.ts";
+ *
+ * assertEquals(
+ *   encodeHello(hello(8, HelloMode.Alias)),
+ *   new Uint8Array([0x49, 0x4b, 0x57, 0x48, 0, 0, 0, 8, 1]), // "IKWH", 8, alias
+ * );
+ * ```
+ */
 export function encodeHello(h: Hello): Uint8Array {
   const out = new Uint8Array(9);
   out.set(HELLO_MAGIC, 0);
@@ -1254,7 +1541,20 @@ export function decodeHello(payload: Uint8Array): Hello | null {
 // Framing
 // ---------------------------------------------------------------------------
 
-/** A wire frame: u32 big-endian length + payload. */
+/**
+ * A wire frame: u32 big-endian length + payload. A payload above
+ * {@linkcode MAX_FRAME} throws {@linkcode ProtocolError} instead.
+ *
+ * ```ts
+ * import { assertEquals } from "@std/assert";
+ * import { frame } from "./wire.ts";
+ *
+ * assertEquals(
+ *   frame(new Uint8Array([2])),
+ *   new Uint8Array([0, 0, 0, 1, 2]),
+ * );
+ * ```
+ */
 export function frame(payload: Uint8Array): Uint8Array {
   if (payload.length > MAX_FRAME) {
     throw new ProtocolError(
@@ -1269,7 +1569,12 @@ export function frame(payload: Uint8Array): Uint8Array {
 
 /** The minimal duplex-byte-stream shape (structurally, a `Deno.Conn`). */
 export interface ByteStream {
+  /**
+   * Read up to `p.length` bytes into `p`: the count read, or `null` at end of
+   * stream.
+   */
   read(p: Uint8Array): Promise<number | null>;
+  /** Write some prefix of `p`, resolving to how many bytes were written. */
   write(p: Uint8Array): Promise<number>;
 }
 
@@ -1281,6 +1586,7 @@ export class FrameStream {
   #conn: ByteStream;
   #pending: Uint8Array = new Uint8Array(0);
 
+  /** Frame over `conn`; from here on, read it only through this stream. */
   constructor(conn: ByteStream) {
     this.#conn = conn;
   }

@@ -7,7 +7,7 @@ on:
 
 # The gate commands live in ONE place: the `tasks` of deno.json. Each step below
 # runs one of them, and `deno task check` (which the repo's justfile `gates`
-# recipe calls) chains the same five in the same order, so local gates and CI
+# recipe calls) chains the same seven in the same order, so local gates and CI
 # cannot drift apart. Change a gate in deno.json, not here.
 jobs:
   test:
@@ -27,6 +27,18 @@ jobs:
         # Type-checks every ```ts block in src/ JSDoc and in README.md. It does
         # not RUN them: they dial the default socket or serve forever.
         run: deno task doc-check
+      - name: Doc lint
+        # Every exported symbol of the mod, wire, client and serve entry points
+        # carries JSDoc (JSR scores it), so the missing-jsdoc count stays 0.
+        # `zod.ts` is not linted here: its signatures name zod's own types,
+        # which `deno doc --lint` reports as private-type-ref.
+        run: deno task doc-lint
+      - name: Doc tests
+        # RUNS the doc examples of the files whose examples are pure: the
+        # wire shapes they pin (call, reply and hello bytes) are checked, not
+        # just type-checked. client.ts and serve.ts examples dial or serve
+        # forever, so they stay type-check-only (above).
+        run: deno task doc-test
       - name: Test
         # Integration tests that need the `ikigai` binary skip themselves
         # when it is absent (CI has no Rust host; they run locally).
