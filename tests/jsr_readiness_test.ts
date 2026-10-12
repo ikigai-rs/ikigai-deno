@@ -70,11 +70,12 @@ Deno.test("JSR: exports are exactly the four entrypoints", () => {
   assertEquals(manifest.exports, EXPECTED_EXPORTS);
 });
 
-Deno.test("JSR: ./zod stays out of exports until ledger #1350", () => {
+Deno.test("JSR: ./zod is never exported (ledger #1350)", () => {
   assert(
     !("./zod" in manifest.exports),
     "`./zod` must not be exported: its signatures name zod's own types " +
-      "(private-type-ref). Import it by path until ledger #1350 is decided.",
+      "(private-type-ref), so it stays out of the published API for good. " +
+      "Import it by path (`./src/zod.ts`).",
   );
   // ...but the file stays in the tree, importable by path.
   assert(Deno.statSync(new URL("src/zod.ts", ROOT)).isFile);
