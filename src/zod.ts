@@ -6,7 +6,7 @@
  *
  * ```ts
  * import { z } from "zod";
- * import { endpoint } from "@ikigai/wire/zod";
+ * import { endpoint } from "./zod.ts"; // not @ikigai/wire/zod yet (ledger #1350)
  *
  * const hello = endpoint("urn:ts:hello", {
  *   summary: "Greet someone",
@@ -44,10 +44,14 @@
  * wire v7 it crosses to the host AS that variant (an HTTP face can answer
  * 400, not a blanket 502).
  *
- * This module is deliberately NOT re-exported from `mod.ts`: zod is a peer
- * dependency of this file alone, resolved only when `@ikigai/wire/zod` is
- * imported. `src/` without it never resolves zod, for consumers who
- * declare `args:` explicitly.
+ * This module is deliberately NOT re-exported from `mod.ts`, and NOT listed in
+ * the package's `exports` (ledger #1350): zod is a peer dependency of this file
+ * alone, resolved only when it is imported by path, and its signatures name
+ * zod's own types — which `deno doc --lint` reports as `private-type-ref`.
+ * Whether an entrypoint of that shape belongs in the published package is
+ * Brian's decision on ledger #1350; until then, import this file by path
+ * (`./src/zod.ts`) rather than as `@ikigai/wire/zod`. `src/` without it never
+ * resolves zod, for consumers who declare `args:` explicitly.
  *
  * The explicit `args:` form keeps working unchanged. When BOTH `args:` and
  * `input:` are given, the explicit specs are used for the describe face —

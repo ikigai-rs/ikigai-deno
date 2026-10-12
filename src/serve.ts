@@ -64,6 +64,8 @@
  * capability carried on `IssueAs`/`IssueTraced` is accepted but not enforced
  * per-scope (capability-on-the-wire for IPC is a known TODO on the Rust side
  * too).
+ *
+ * @module
  */
 
 import * as wire from "./wire.ts";

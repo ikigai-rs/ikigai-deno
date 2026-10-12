@@ -29,6 +29,8 @@
  *
  * A binding = client + servable peer space; the module mechanism IS
  * mount-over-wire.
+ *
+ * @module
  */
 
 export {
