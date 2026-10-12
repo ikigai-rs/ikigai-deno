@@ -1,0 +1,16 @@
+# Every text file is checked out with LF line endings, on every platform (ledger #1205).
+#
+# Git for Windows installs with core.autocrlf=true, which checks text files out with
+# CRLF. ikigai-devtools' vector-drift compares the shared contract vectors and the
+# tic-tac-toe template cases by their raw bytes across the three faces, so a CRLF
+# checkout of either reads as drift. `eol=lf` on a path overrides core.autocrlf for it.
+# The index was already LF throughout (`git ls-files --eol`, 2026-10-11), so this needs
+# no renormalize.
+* text=auto eol=lf
+
+# Named explicitly, so content detection can never decide them.
+tests/contract_vectors.json  text eol=lf
+tests/ttt_template_cases.txt text eol=lf
+*.ts   text eol=lf
+*.json text eol=lf
+*.sh   text eol=lf
