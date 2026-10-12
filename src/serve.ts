@@ -84,6 +84,7 @@ import {
 } from "./wire.ts";
 import { UriTemplate } from "./template.ts";
 import { contractIri, escapeIriFragment } from "./contract.ts";
+import { isAbsoluteIri } from "./iri.ts";
 
 export { TemplateError, UriTemplate } from "./template.ts";
 
@@ -303,17 +304,30 @@ function descriptionTurtle(d: DescriptionModel): string {
     s.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\n", "\\n")
       .replaceAll("\r", "\\r").replaceAll("\t", "\\t") +
     '"';
+  // Core's `iri_term`: an authored value MEANT to be an IRI (a `class`, a
+  // capability scope) is percent-encoded so it cannot close the `<…>` early,
+  // and emitted as a resource only when the encoded form parses as an IRI
+  // (`Iri::parse`, oxiri); anything else degrades to a literal of the author's
+  // text. Encoding alone is not enough: `http://a> . <b` encodes to a legal
+  // IRIREF whose "port" is not a number, which would fail the whole document.
+  const iriTerm = (s: string): string => {
+    const escaped = escapeIriFragment(s);
+    return isAbsoluteIri(escaped) ? `<${escaped}>` : lit(s);
+  };
+  // Core's `cap_term`: a scope that looks like an IRI goes through `iriTerm`
+  // (the prefix only rules a value OUT of IRI-hood, never in); any other is a
+  // legacy descriptive label.
   const capTerm = (scope: string): string =>
     scope.startsWith("urn:") || scope.startsWith("http://") ||
       scope.startsWith("https://")
-      ? `<${scope}>`
+      ? iriTerm(scope)
       : lit(scope);
   const inputPredicates = (arg: ArgSpec): string => {
     let node = `ik:inputName ${lit(arg.name)} ;\n` +
       `    ik:source ${lit(arg.source)} ;\n` +
       `    ik:required ${arg.required ? "true" : "false"}`;
     if (arg.summary) node += ` ;\n    ik:summary ${lit(arg.summary)}`;
-    if (arg.cls !== null) node += ` ;\n    ik:class <${arg.cls}>`;
+    if (arg.cls !== null) node += ` ;\n    ik:class ${iriTerm(arg.cls)}`;
     if (arg.default !== null) node += ` ;\n    ik:default ${lit(arg.default)}`;
     for (const value of arg.oneOf) node += ` ;\n    ik:oneOf ${lit(value)}`;
     return node;
