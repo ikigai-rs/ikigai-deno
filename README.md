@@ -43,13 +43,61 @@ the serving side (`./serve` and the root `.`) loads it: the `./client` and
 
 The rest stays out of a consumer's graph: `@std/assert` is test-only; the web
 frameworks in the import map are used only by `examples/`; **zod** is a peer
-dependency of the `./zod` entry point alone — nothing else imports it, so
-consumers who declare `args:` explicitly never resolve it. Until it is published
-to JSR, import by path or URL:
+dependency of `src/zod.ts` alone — nothing else imports it, so consumers who
+declare `args:` explicitly never resolve it. Until it is published to JSR,
+import by path or URL:
 
 ```ts
 import { connect, endpoint, serve } from "./src/mod.ts";
 ```
+
+### JSR: what is exported, and why `./zod` is not yet
+
+The published surface is exactly four entrypoints — `.` (`src/mod.ts`),
+`./wire`, `./client` and `./serve`. **`./zod` is deliberately left out of
+`exports`** (ledger #1350): its signatures name zod's own types, which
+`deno doc --lint` reports as `private-type-ref`, and whether an entrypoint with
+that shape belongs in the package is Brian's call on that item. The file stays
+in the tree and is importable **by path** (`./src/zod.ts`) meanwhile, so the
+`zod → ArgSpec` rung below keeps working — only the `@ikigai/wire/zod` specifier
+is not offered yet.
+
+`deno publish --dry-run` (the `publish-check` task) is what keeps this honest:
+it walks the exports, fails on any TypeScript **slow type**, and refuses a
+missing license. `deno doc --lint` is the other half — it fails on a missing
+**doc** — because the dry run alone does not score symbol documentation.
+
+Both run on every CI change, from `tests/jsr_readiness_test.ts`: the worker that
+added this item cannot edit `.github/workflows/` (its GitHub token deliberately
+has no Workflows permission — "a worker must not edit CI", `worker/README.md`
+§3), so instead of a new workflow step the suite the existing `Test` step
+already runs invokes the two tasks. The commands still live in ONE place — the
+`tasks` of `deno.json` — and the suite also pins the manifest facts they read
+(the JSR fields, the exact four exports, `./zod` absent, a module doc on every
+entrypoint), each with a negative control that makes it fail.
+
+**The JSR score this package would get.** The dry run reports pass/fail, not a
+number; the number is JSR's own scoring, and its factors and weights are in
+JSR's `frontend/routes/package/score.tsx` (and the "Score" tab of any package).
+Against that table, this package completes **every factor the score can read
+from the tree** — 14 of the 18 weighted points:
+
+| factor                                   | weight | here                                              |
+| ---------------------------------------- | ------ | ------------------------------------------------- |
+| Has a readme or module doc               | 2      | ✅ README.md                                      |
+| Has examples in the readme or module doc | 1      | ✅ README code blocks                             |
+| Has module docs in all entrypoints       | 1      | ✅ `@module` in all four                          |
+| Has docs for most symbols (≥80%)         | 5      | ✅ 100% (doc-lint, ledger #1349)                  |
+| No slow types are used                   | 5      | ✅ publish-check                                  |
+| Has a description                        | 1      | ⚠ a package-page setting, not a `deno.json` field |
+| At least one runtime is compatible       | 1      | ⚠ a package-page setting                          |
+| At least two runtimes are compatible     | 1      | ⚠ a package-page setting                          |
+| Has provenance                           | 1      | ⚠ only a real publish from CI produces it         |
+
+So the tree carries everything the score can read from files (14/14 of those
+points); the other four are **settings on the package page** plus provenance,
+which exist only once Brian publishes. They are listed plainly rather than
+assumed green.
 
 ### The host this README's examples require: `ikigai-cli` ≥ 0.1.18
 
@@ -228,15 +276,15 @@ host's failover will treat your `UnavailableError` as transient and your
 
 ### zod → ArgSpec (declare the contract once)
 
-TS types are erased at runtime, so L0 ArgSpecs are explicit spec data. The
-`./zod` entry point closes that gap: a `z.object(...)` is the ONE statement of
-the input contract — the ArgSpecs derive from it, the same schema validates
-every dispatch (before the handler), and the handler receives the parsed, typed
-output:
+TS types are erased at runtime, so L0 ArgSpecs are explicit spec data. The zod
+module (`src/zod.ts`, imported by path until ledger #1350) closes that gap: a
+`z.object(...)` is the ONE statement of the input contract — the ArgSpecs derive
+from it, the same schema validates every dispatch (before the handler), and the
+handler receives the parsed, typed output:
 
 ```ts
 import { z } from "zod";
-import { endpoint } from "@ikigai/wire/zod";
+import { endpoint } from "./src/zod.ts"; // not @ikigai/wire/zod yet (ledger #1350)
 
 const hello = endpoint("urn:ts:hello", {
   summary: "Greet someone",
@@ -347,7 +395,7 @@ The rules, stated once:
   `examples/tictactoe_store.ts` does, with `BigInt` for the i64 range. (The
   reasoning is recorded as ikigai ledger item 580.)
 - A variable and an argument with the same name are refused at declaration: a
-  name has one source. (`./zod` endpoints take exact IRIs only.)
+  name has one source. (Endpoints declared with zod take exact IRIs only.)
 
 The worked example is the ikigai book's tic-tac-toe atom,
 [`examples/tictactoe_store.ts`](examples/tictactoe_store.ts): the stored cell
@@ -373,8 +421,8 @@ and counts the reads that reached Deno.
   not valid utf-8), plus a family's template variables (always strings).
   By-reference arguments (`ArgRef::Reference` / `Content`) are refused loudly
   (as a typed `InvalidArgument`): an L0 peer has no back-channel to the host to
-  dereference them. Handlers registered through `./zod` instead receive the
-  schema's parsed, typed output.
+  dereference them. Handlers registered through zod instead receive the schema's
+  parsed, typed output.
 - Return `string` or `Uint8Array` (typed by the endpoint's declared `output`), a
   `[value, mediaType]` tuple, or a full `Representation`. Async handlers are
   fine.

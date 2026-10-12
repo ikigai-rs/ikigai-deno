@@ -27,6 +27,8 @@
  * reply (EOF mid-reply, read timeout) always fails without replay — the
  * server may have executed it, and replaying a Sink is not this layer's
  * decision to make (the same idempotency caution the Rust transports state).
+ *
+ * @module
  */
 
 import * as wire from "./wire.ts";

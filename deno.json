@@ -6,8 +6,7 @@
     ".": "./src/mod.ts",
     "./wire": "./src/wire.ts",
     "./client": "./src/client.ts",
-    "./serve": "./src/serve.ts",
-    "./zod": "./src/zod.ts"
+    "./serve": "./src/serve.ts"
   },
   "imports": {
     "zod": "npm:zod@^4.0",
@@ -34,6 +33,7 @@
     "doc-check": "deno check --doc-only src README.md",
     "doc-lint": "deno doc --lint src/mod.ts src/wire.ts src/client.ts src/serve.ts",
     "doc-test": "deno test --doc src/wire.ts src/template.ts",
+    "publish-check": "deno publish --dry-run --allow-dirty",
     "test": "deno test -A",
     "check": "deno task fmt-check && deno task lint && deno task typecheck && deno task doc-check && deno task doc-lint && deno task doc-test && deno task test"
   }

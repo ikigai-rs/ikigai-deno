@@ -39,6 +39,8 @@
  * {@linkcode replyForPeer}). A v7 SERVER answers a v8 hello with 7 and hangs
  * up (unequal versions close, under v7's rules), so a v8 client that hears 7
  * redials once, saying 7.
+ *
+ * @module
  */
 
 import { DecodeError, Reader, Writer } from "./postcard.ts";
