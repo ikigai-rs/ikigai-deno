@@ -15,8 +15,11 @@
  *   pinned by `tests/contract_test.ts` against vectors a Rust build of core
  *   produced.
  *
- * Both encode their variable segments with an **injective** percent-encoding
- * (`%` itself is encoded), so each IRI parses back to exactly what made it.
+ * Both encode their variable segments with core's **name** encoding
+ * (`encode_name`): an injective percent-encoding (`%` itself is encoded) of
+ * the `IRIREF` set, `[` and `]`, `#` and `?`, and every non-`ucschar` code
+ * point, so each IRI parses back to exactly what made it — and parses as an
+ * IRI whatever the name holds.
  *
  * ```ts
  * import { contractIri, matchIri, Verb } from "@ikigai/wire";
@@ -77,29 +80,70 @@ function percentEncode(s: string, encode: (cp: number) => boolean): string {
  * `IRIREF` cannot carry, leaving `%` alone (so it is NOT injective). Used for
  * an AUTHORED IRI (a `class`, a capability scope), whose escapes are real, as
  * `ikigai_vocab`'s `iri_term` does; a NAME goes through {@linkcode nameFragment}.
+ *
+ * `[`, `]`, `#` and `?` stay too (ledger #1361, #1390): they are legal in an
+ * authored IRI (an IPv6 host, a fragment, a query) and encoding them would
+ * change it. Only a NAME encodes them.
  */
 export function escapeIriFragment(s: string): string {
   return percentEncode(s, isIriForbidden);
 }
 
 /**
- * Core's `name_fragment` (`ikigai_vocab`, ikigai-core PR 187): encode a NAME
- * (an endpoint id, an input name) for an IRI position, `%` as `%25` and then
- * {@linkcode escapeIriFragment}. A name is not an authored IRI, so a `%` in it
- * is a character, never the start of an escape: left alone, `100% sure`
- * emitted `100%%20sure`, which no parser accepts, and the whole Turtle Meta
- * document was refused (ledger #1345). The endpoint and input nodes are then
- * spelled as a contract IRI spells the id, and the encoding is injective.
- *
- * Not exported from the package: core's is private too.
+ * Whether `cp` is a code point the IRI grammar (RFC 3987) does not admit in a
+ * path segment although a Turtle `IRIREF` carries it: DEL, and every
+ * non-ASCII code point that is not a `ucschar` (the C1 controls, private use,
+ * the noncharacters, the specials block, and the tags and variation-selector
+ * plane E0000 to E0FFF). Core's `is_non_ucschar` (ledger #1351).
  */
-export function nameFragment(s: string): string {
-  return escapeIriFragment(s.replaceAll("%", "%25"));
+function isNonUcschar(cp: number): boolean {
+  if (cp < 0x80) return cp === 0x7f;
+  // RFC 3987 `ucschar`; a JS string iterated by code point has no surrogate
+  // pair to split, so the D800-DFFF gap needs no arm.
+  const inBmp = (cp >= 0xa0 && cp <= 0xd7ff) ||
+    (cp >= 0xf900 && cp <= 0xfdcf) ||
+    (cp >= 0xfdf0 && cp <= 0xffef);
+  // Planes 1 to 14, less each plane's last two code points (noncharacters)
+  // and E0000 to E0FFF; planes 15 and 16 are private use.
+  const aboveBmp = cp >= 0x10000 && cp <= 0xefffd &&
+    (cp & 0xffff) <= 0xfffd &&
+    !(cp >= 0xe0000 && cp <= 0xe0fff);
+  return !(inBmp || aboveBmp);
 }
 
-/** Core's injective segment encoding: `%` too, plus the `IRIREF` set. */
-function encodeSegment(s: string): string {
-  return percentEncode(s, (cp) => cp === 0x25 || isIriForbidden(cp));
+/**
+ * Core's `encode_name`'s `must_encode`: whether a character must be
+ * percent-encoded in a NAME. `%` itself (so the encoding is injective),
+ * everything a Turtle `IRIREF` cannot carry, `[` and `]` (an IRI admits them
+ * only around an IP-literal host, never in the path a name lands in), `#` and
+ * `?` (a name is ONE path segment, and either would end the path there and
+ * move the rest of the name into a fragment or a query), and every code point
+ * the IRI grammar refuses although an `IRIREF` carries it
+ * ({@linkcode isNonUcschar}).
+ */
+function mustEncodeName(cp: number): boolean {
+  return cp === 0x25 || cp === 0x23 || cp === 0x3f || cp === 0x5b ||
+    cp === 0x5d || isIriForbidden(cp) || isNonUcschar(cp);
+}
+
+/**
+ * Core's `encode_name` (`ikigai_vocab::name_fragment`): percent-encode a NAME
+ * (an endpoint id, an input name, a door pattern) for an IRI position,
+ * injectively — `%` as `%25`, the `IRIREF` set, `[` and `]`, `#` and `?`, and
+ * every non-`ucschar` code point. A name is not an authored IRI, so a `%` in
+ * it is a character, never the start of an escape: left alone, `100% sure`
+ * emitted `100%%20sure`, which no parser accepts, and the whole Turtle Meta
+ * document was refused (ledger #1345). The brackets and the non-`ucschar` code
+ * points are what no IRI can carry (ledger #1361); `#` and `?` would end the
+ * one path segment a name is (ledger #1390). The endpoint and input nodes are
+ * then spelled as a contract IRI spells the id, and the encoding is
+ * injective: `a%41` and `aA` stay apart.
+ *
+ * Not exported from the package: core's is public, but nothing here takes a
+ * name from a caller.
+ */
+export function nameFragment(s: string): string {
+  return percentEncode(s, mustEncodeName);
 }
 
 /** A verb's lower-case name, as the IRIs spell it. */
@@ -109,11 +153,12 @@ function verbSegment(verb: Verb): string {
 
 /**
  * The match IRI of one door and verb: `urn:ikigai:match:{verb}:{pattern}`,
- * the pattern percent-encoded injectively (a template's braces become
- * `%7B`/`%7D`). Mirrors core's `match_iri`.
+ * the pattern percent-encoded as core encodes a NAME (a template's braces
+ * become `%7B`/`%7D`, and a `[`, a `#` or a non-`ucschar` code point is
+ * encoded too). Mirrors core's `match_iri`.
  */
 export function matchIri(verb: Verb, pattern: string): string {
-  return `${MATCH_PREFIX}${verbSegment(verb)}:${encodeSegment(pattern)}`;
+  return `${MATCH_PREFIX}${verbSegment(verb)}:${nameFragment(pattern)}`;
 }
 
 /**
@@ -279,6 +324,6 @@ export function contractId(endpointId: string, spec: ActionSpecModel): string {
  * `ik:Action`, and what a manifold row's `ik:contract` points at.
  */
 export function contractIri(endpointId: string, spec: ActionSpecModel): string {
-  return `${CONTRACT_PREFIX}${encodeSegment(endpointId)}:` +
+  return `${CONTRACT_PREFIX}${nameFragment(endpointId)}:` +
     `${verbSegment(spec.verb)}:${contractId(endpointId, spec)}`;
 }

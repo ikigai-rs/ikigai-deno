@@ -14,6 +14,13 @@
  * The `deno/…` doors in it are this package's own, built in
  * `contract_cases.ts`; the face-local test below checks that the public API
  * still builds exactly those descriptions.
+ *
+ * The copy carries core 0.1.101's name encoding (ledger #1361, #1390): a NAME
+ * — an endpoint id, an input name, a door pattern — is percent-encoded by
+ * `encode_name` for `%`, the `IRIREF` set, `[`, `]`, `#`, `?` and every
+ * non-`ucschar` code point. `src/contract.ts`'s {@linkcode nameFragment}
+ * mirrors it, and the `core/bracket-names` and `core/hash-query-names` doors
+ * pin the rule.
  */
 
 import {
@@ -44,6 +51,8 @@ import { type Reply, Verb } from "../src/wire.ts";
 import { CASES } from "./contract_cases.ts";
 
 type Json = Record<string, unknown>;
+
+const utf8 = new TextEncoder();
 
 interface Door {
   name: string;
@@ -122,12 +131,19 @@ function descriptionModel(json: Json): DescriptionModel {
  * A door that answers Meta with a given description and nothing else, so a
  * vector's description (another face's door included) goes through the same
  * renderers this package's own doors use.
+ *
+ * The renderers read only the DESCRIPTION, so the door's own pattern is not
+ * what is under test here. It cannot be the vector's `pattern` either: this
+ * face's served doors are `urn:`-only (`ServedDef`'s declaration guard, as in
+ * ikigai-python), and core's own `core/bracket-names` door is registered at
+ * `http://[::1]:8080/{key}`. A vector's pattern is checked where it IS the
+ * subject, straight from the file (the `matches` section).
  */
 class VectorDoor extends ServedDef {
   readonly #model: DescriptionModel;
 
-  constructor(pattern: string, json: Json) {
-    super(pattern, {}, json["id"] as string);
+  constructor(json: Json) {
+    super("urn:vector", {}, json["id"] as string);
     this.#model = descriptionModel(json);
   }
 
@@ -172,7 +188,7 @@ Deno.test("each vector description survives this test's adapter unchanged", () =
   // Otherwise a failure below could be the adapter's rather than the face's.
   for (const door of VECTORS.doors) {
     assertEquals(
-      new VectorDoor(door.pattern, door.description).descriptionJson(),
+      new VectorDoor(door.description).descriptionJson(),
       door.description,
       door.name,
     );
@@ -201,7 +217,7 @@ Deno.test("face-local: the public API still builds every deno/ door in the vecto
 Deno.test("doors: the Turtle Meta face is core's to_turtle, byte for byte", () => {
   for (const door of VECTORS.doors) {
     assertStrictEquals(
-      new VectorDoor(door.pattern, door.description).descriptionTurtle(),
+      new VectorDoor(door.description).descriptionTurtle(),
       door.turtle,
       door.name,
     );
@@ -213,7 +229,7 @@ Deno.test("doors: every IRI this face writes in a door's Turtle parses", () => {
   // door must parse. Checked here on what THIS face emits, with the oxiri
   // mirror, so a name encoding that regresses fails even before a vector moves.
   for (const door of VECTORS.doors) {
-    const ttl = new VectorDoor(door.pattern, door.description)
+    const ttl = new VectorDoor(door.description)
       .descriptionTurtle();
     // String literals first: a hostile literal may hold `<…>` text.
     const bare = ttl.replaceAll(/"(?:[^"\\]|\\.)*"/g, '""');
@@ -225,13 +241,111 @@ Deno.test("doors: every IRI this face writes in a door's Turtle parses", () => {
   }
 });
 
-Deno.test("nameFragment is core's name_fragment: % as %25, then the IRIREF set", () => {
+Deno.test("nameFragment is core's encode_name: % as %25, then the IRIREF set", () => {
   assertStrictEquals(nameFragment("100% sure"), "100%25%20sure");
   assertStrictEquals(nameFragment("rate%25"), "rate%2525");
   assertStrictEquals(nameFragment("plain"), "plain");
   // An authored IRI keeps its escapes; a name never does.
   assertStrictEquals(escapeIriFragment("urn:cls:a%20b"), "urn:cls:a%20b");
   assertNotEquals(nameFragment("a%41"), nameFragment("aA"));
+});
+
+Deno.test("nameFragment encodes the rest of a NAME: brackets, #, ?, non-ucschar", () => {
+  // Core's own `encode_name` doctest, verbatim (ledger #1361, #1390).
+  assertStrictEquals(nameFragment("toUpper"), "toUpper");
+  assertStrictEquals(nameFragment("naïve"), "naïve");
+  assertStrictEquals(nameFragment("50% off"), "50%25%20off");
+  // An id that is a full IRI with an IPv6 host: the brackets are encoded in a NAME.
+  assertStrictEquals(nameFragment("http://[::1]/x"), "http://%5B::1%5D/x");
+  // DEL, NEL, private use, a noncharacter: no IRI carries them raw.
+  assertStrictEquals(nameFragment("a\u{7F}b\u{85}c"), "a%7Fb%C2%85c");
+  assertStrictEquals(nameFragment("\u{E000}\u{FFFF}"), "%EE%80%80%EF%BF%BF");
+  // A name is one path segment: `#` and `?` would start a fragment or a query.
+  assertStrictEquals(nameFragment("a#b"), "a%23b");
+  assertStrictEquals(nameFragment("a?b"), "a%3Fb");
+  // An AUTHORED IRI keeps all of them (core's `escape_iri_fragment`).
+  assertStrictEquals(escapeIriFragment("http://[::1]/cap"), "http://[::1]/cap");
+  assertStrictEquals(escapeIriFragment("urn:x#y"), "urn:x#y");
+  assertStrictEquals(escapeIriFragment("urn:x?y"), "urn:x?y");
+});
+
+/** Invert {@linkcode nameFragment} as core's `decode_segment` does. */
+function decodeName(s: string): string {
+  const bytes: number[] = [];
+  for (let i = 0; i < s.length;) {
+    if (s[i] === "%") {
+      assertMatch(s.slice(i + 1, i + 3), /^[0-9A-Fa-f]{2}$/, s);
+      bytes.push(parseInt(s.slice(i + 1, i + 3), 16));
+      i += 3;
+    } else {
+      const cp = s.codePointAt(i)!;
+      bytes.push(...utf8.encode(String.fromCodePoint(cp)));
+      i += cp > 0xffff ? 2 : 1;
+    }
+  }
+  return new TextDecoder().decode(Uint8Array.from(bytes));
+}
+
+Deno.test("a NAME round-trips: encode_name is injective and inverts exactly", () => {
+  // The item's two cases, plus one of each class a name escaper encodes.
+  const names = [
+    "http://[::1]/x",
+    "a\u{85}b", // U+0085 NEL
+    "plain",
+    "50% off",
+    "a%41",
+    "a[0]",
+    "del\u{7F} nel\u{85} pua\u{E000} nonchar\u{FDD0}\u{FFFF}",
+    "a#b?c#d",
+    "urn:ts:naïve 𝄞|x",
+  ];
+  const seen = new Set<string>();
+  for (const name of names) {
+    const encoded = nameFragment(name);
+    assertStrictEquals(decodeName(encoded), name, name);
+    // Injective: no two names share one spelling.
+    assert(!seen.has(encoded), `${JSON.stringify(name)} collides`);
+    seen.add(encoded);
+    // And the encoded name is a path segment an IRI parser accepts.
+    assert(
+      isAbsoluteIri(`urn:ikigai:endpoint:${encoded}`),
+      `urn:ikigai:endpoint:${encoded}`,
+    );
+  }
+  // `%` stays encoded, so an escaped name and its unescaped twin stay apart.
+  assertNotEquals(nameFragment("a%41"), nameFragment("aA"));
+});
+
+Deno.test("the bracket and NEL names round-trip through match and contract IRIs", () => {
+  // A door pattern and an endpoint id are both NAMES: the match and contract
+  // IRIs carry the encoded spelling, and core's `parse_match_iri` /
+  // `parse_contract_iri` would give the name back (the vectors' `parses`
+  // section pins those canonical spellings).
+  assertStrictEquals(
+    matchIri(Verb.Source, "http://[::1]/x"),
+    "urn:ikigai:match:source:http://%5B::1%5D/x",
+  );
+  assertStrictEquals(
+    matchIri(Verb.Source, "a\u{85}b"),
+    "urn:ikigai:match:source:a%C2%85b",
+  );
+  const spec: ActionSpecModel = {
+    verb: Verb.Source,
+    summary: "",
+    inputs: [],
+    outputs: [],
+    requires: [],
+  };
+  assert(
+    contractIri("http://[::1]/x", spec).startsWith(
+      "urn:ikigai:contract:http://%5B::1%5D/x:source:b3:",
+    ),
+  );
+  assert(
+    contractIri("a\u{85}b", spec).startsWith(
+      "urn:ikigai:contract:a%C2%85b:source:b3:",
+    ),
+  );
 });
 
 Deno.test("doors: matchIri and contractIri are core's on every action", () => {
