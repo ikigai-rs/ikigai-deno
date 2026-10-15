@@ -23,7 +23,8 @@
   ],
   "fmt": {
     "exclude": [
-      "tests/contract_vectors.json"
+      "tests/contract_vectors.json",
+      "tests/capability_vectors.json"
     ]
   },
   "tasks": {

@@ -33,9 +33,7 @@ import {
 import {
   type ActionSpecModel,
   ArgSpec,
-  type ArgSpecInput,
   type DescriptionModel,
-  ServedDef,
 } from "../src/serve.ts";
 import {
   CONTRACT_PREFIX,
@@ -47,10 +45,15 @@ import {
   nameFragment,
 } from "../src/contract.ts";
 import { isAbsoluteIri } from "../src/iri.ts";
-import { type Reply, Verb } from "../src/wire.ts";
+import { Verb } from "../src/wire.ts";
 import { CASES } from "./contract_cases.ts";
-
-type Json = Record<string, unknown>;
+import {
+  actionSpec,
+  descriptionModel,
+  type Json,
+  VectorDoor,
+  verbOf,
+} from "./vector_door.ts";
 
 const utf8 = new TextEncoder();
 
@@ -78,87 +81,6 @@ const VECTORS: {
 } = JSON.parse(
   await Deno.readTextFile(new URL("./contract_vectors.json", import.meta.url)),
 );
-
-const verbOf = (name: string): Verb => {
-  const verb = Verb[name as keyof typeof Verb];
-  assert(verb !== undefined, `not a verb: ${name}`);
-  return verb;
-};
-
-const list = <T>(from: Json, key: string): T[] =>
-  (from[key] as T[] | undefined) ?? [];
-
-/** A serde `ArgSpec` (the JSON Meta face's shape) as this package's ArgSpec. */
-function argSpec(json: Json): ArgSpec {
-  const input: ArgSpecInput = {
-    name: json["name"] as string,
-    summary: json["summary"] as string,
-    required: json["required"] as boolean,
-    source: json["source"] as "argument" | "binding",
-  };
-  if ("class" in json) input.class = json["class"] as string;
-  if ("default" in json) input.default = json["default"] as string;
-  if ("one_of" in json) input.oneOf = json["one_of"] as string[];
-  return new ArgSpec(input);
-}
-
-/** A serde `ikigai_core::ActionSpec` as this package's model. */
-function actionSpec(json: Json): ActionSpecModel {
-  return {
-    verb: verbOf(json["verb"] as string),
-    summary: (json["summary"] as string | undefined) ?? "",
-    inputs: list<Json>(json, "inputs").map(argSpec),
-    outputs: list<string>(json, "outputs"),
-    requires: list<string>(json, "requires"),
-  };
-}
-
-/** A serde `ikigai_core::Description` as this package's model. */
-function descriptionModel(json: Json): DescriptionModel {
-  return {
-    id: json["id"] as string,
-    title: json["title"] as string,
-    summary: json["summary"] as string,
-    verbs: list<string>(json, "verbs").map(verbOf),
-    inputs: list<Json>(json, "inputs").map(argSpec),
-    outputs: list<string>(json, "outputs"),
-    requires: list<string>(json, "requires"),
-    actions: list<Json>(json, "actions").map(actionSpec),
-  };
-}
-
-/**
- * A door that answers Meta with a given description and nothing else, so a
- * vector's description (another face's door included) goes through the same
- * renderers this package's own doors use.
- *
- * The renderers read only the DESCRIPTION, so the door's own pattern is not
- * what is under test here. It cannot be the vector's `pattern` either: this
- * face's served doors are `urn:`-only (`ServedDef`'s declaration guard, as in
- * ikigai-python), and core's own `core/bracket-names` door is registered at
- * `http://[::1]:8080/{key}`. A vector's pattern is checked where it IS the
- * subject, straight from the file (the `matches` section).
- */
-class VectorDoor extends ServedDef {
-  readonly #model: DescriptionModel;
-
-  constructor(json: Json) {
-    super("urn:vector", {}, json["id"] as string);
-    this.#model = descriptionModel(json);
-  }
-
-  description(): DescriptionModel {
-    return this.#model;
-  }
-
-  answer(): Promise<Reply> {
-    throw new Error("a vector door answers Meta only");
-  }
-
-  protected answeredVerbs(): Verb[] {
-    return [];
-  }
-}
 
 /** `Description::action_specs`: one per non-Meta verb, explicit or flat. */
 function actionSpecs(d: DescriptionModel): ActionSpecModel[] {
