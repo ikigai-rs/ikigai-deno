@@ -64,6 +64,10 @@ function makeEndpoints() {
       summary: "Greeting with a default",
       args: [{ name: "who", default: "world" }],
     }, ({ who }) => `hi ${who}`),
+    endpoint("urn:ts:vault", {
+      summary: "Gated by a declared capability",
+      requires: ["urn:cap:ts:vault:read"],
+    }, () => "opened"),
   ];
 }
 
@@ -309,11 +313,40 @@ Deno.test("a scoped capability crosses and lands in the trace span", async () =>
     });
     const [, events] = await k.sourceTraced("urn:ts:hello", { who: "T" });
     assertEquals(events[0].capability, ["urn:cap:demo"]);
-    // IssueAs also round-trips (accepted, not enforced per-scope at L0).
+    // IssueAs round-trips too: `urn:ts:hello` declares no `requires`, so it
+    // is public and any capability, the empty one included, may call it.
     assertStrictEquals(
       (await k.source("urn:ts:hello", { who: "c" })).text,
       "Hello, c!",
     );
+  });
+});
+
+Deno.test("the peer's capability floor refuses an under-capable IssueAs as Denied", async () => {
+  await withServer(async (path) => {
+    // A carried capability that does not cover `requires` is refused by the
+    // PEER, typed, with core's text; the host need not have checked first.
+    await using scoped = await connect(path, {
+      capability: Capability.scoped(["urn:cap:demo"]),
+    });
+    const err = await assertRejects(
+      () => scoped.source("urn:ts:vault"),
+      DeniedError,
+    );
+    assertStrictEquals(
+      err.message,
+      "capability does not grant `urn:cap:ts:vault:read` (declared by `urn:ts:vault`)",
+    );
+    // Traced calls carry the capability too, and are floored the same way.
+    await assertRejects(() => scoped.sourceTraced("urn:ts:vault"), DeniedError);
+    // A covering capability runs.
+    await using covered = await connect(path, {
+      capability: Capability.scoped(["urn:cap:ts:vault:read"]),
+    });
+    assertStrictEquals((await covered.source("urn:ts:vault")).text, "opened");
+    // A plain Issue (no capability) is the socket owner's root.
+    await using owner = await connect(path);
+    assertStrictEquals((await owner.source("urn:ts:vault")).text, "opened");
   });
 });
 

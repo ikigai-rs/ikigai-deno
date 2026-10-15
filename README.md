@@ -162,7 +162,8 @@ Notes:
 
 - `connect(path, { capability: Capability.scoped([...]) })` sends requests as
   `Call::IssueAs` under that capability; the server clamps it to the principal
-  the channel authenticated.
+  the channel authenticated, and its capability floor refuses a call the
+  capability does not cover as a `DeniedError`.
 - `k.serverVersion` is the version the connection negotiated — 7 against a v7
   server (the client offers 8, hears 7, and redials once saying 7, because a v7
   server hangs up on any hello but its own), 8 against a v8 one — since v7
@@ -512,10 +513,29 @@ The socket is `0600` in a `0700` directory, and the kernel enforces that mode on
 cannot verify the connecting peer's UID**: Deno exposes no
 `SO_PEERCRED`/`LOCAL_PEERCRED` API (and no `getsockopt` at all), so the
 file-permission gate is the whole transport trust story here. Do not serve on a
-path whose parent directory other users can traverse. A capability carried on
-`IssueAs`/`IssueTraced` is accepted and surfaced (e.g. in trace spans) but **not
-enforced per-scope** — capability-on-the-wire for IPC is a known TODO on the
-Rust side too; do not treat a Deno peer as a capability boundary.
+path whose parent directory other users can traverse.
+
+**The capability floor is enforced on every call**, as core's kernel enforces
+it: a capability carried on `IssueAs`/`IssueTraced` must satisfy every scope the
+door declares for the request's verb, or the call is refused as a typed `Denied`
+(core's message text) before the handler runs. The rules are core's:
+
+- Per verb: a verb's own `requires` (on a `family` verb) REPLACES the flat list
+  for that verb; an undeclared Exists needs what Source needs; any other
+  undeclared verb needs every scope the door declares; Meta is never floored.
+- Coverage is `Capability.satisfies`: a plain scope must be held exactly (an
+  exclusion such as `urn:cap:fs:read:-/secret` is never granted, and a
+  `urn:cap:principal:<iri>` only as the capability's one principal); a scope
+  ending in `*` (`urn:cap:net:*`) is satisfied by holding any scope under that
+  prefix; root satisfies everything.
+- A plain `Issue` carries no capability and resolves under root, as the Rust IPC
+  door resolves its owner's plain `Issue`: the socket's `0600` mode makes every
+  connecting peer the owner, so the owner's ceiling is root and a carried
+  capability is used as carried.
+
+A handler does not see the caller's capability, so a finer, argument-dependent
+gate (a path or host ACL) is not expressible here yet; the floor is the coarse
+declared check only.
 
 ## Wire-protocol notes (for implementors)
 
