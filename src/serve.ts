@@ -60,10 +60,16 @@
  * Python servers this one CANNOT verify the connecting peer's UID — the
  * socket file's `0600` mode is the whole gate (the kernel enforces it on
  * `connect`, on both Linux and macOS). That is a real, honest difference; do
- * not serve on a path whose parent directory other users can traverse. A
- * capability carried on `IssueAs`/`IssueTraced` is accepted but not enforced
- * per-scope (capability-on-the-wire for IPC is a known TODO on the Rust side
- * too).
+ * not serve on a path whose parent directory other users can traverse.
+ *
+ * **The capability floor is enforced here, on every call** (core's
+ * declared-capability floor, ported): a capability carried on
+ * `IssueAs`/`IssueTraced` must satisfy every scope the door declares for the
+ * verb (`requires`, per verb when declared per verb, flat otherwise), or the
+ * call is refused as a typed `Denied` before the handler runs — so a host
+ * that forwards a caller's capability can rely on this peer running its own
+ * floor. A plain `Issue` carries no capability and resolves under root, as
+ * the Rust IPC door does for its owner. See {@linkcode Space.dispatch}.
  *
  * @module
  */
@@ -296,6 +302,63 @@ function actionSpecs(d: DescriptionModel): ActionSpecModel[] {
       requires: d.requires,
     }
   );
+}
+
+/**
+ * The scopes a request with `verb` must hold to pass the capability floor
+ * (core's `Floor::requirements`, `Description::required_scopes`), row for
+ * row:
+ *
+ * | the request's verb | the door declares | the floor |
+ * |---|---|---|
+ * | declared (flat, or by its own action) | — | exactly that verb's `requires` |
+ * | `Exists`, undeclared | `Source` | `Source`'s `requires` |
+ * | `Exists`, undeclared | no `Source` | every `requires` it declares |
+ * | `Source`, `Sink`, `Delete`, undeclared | — | every `requires` it declares |
+ * | `Meta` | — | none |
+ *
+ * A verb's own action REPLACES the flat `requires` for that verb (the two
+ * forms are exclusive per verb, as in core). "Every `requires` it declares"
+ * is the union over {@linkcode actionSpecs}, deduplicated in declaration
+ * order; when that is empty (a description that declares no verb but Meta)
+ * it is the flat `requires` plus any actions' `requires`.
+ */
+function requiredScopes(d: DescriptionModel, verb: Verb): string[] {
+  const declared = actionSpecs(d);
+  const own = declared.find((a) => a.verb === verb);
+  if (own !== undefined) return [...own.requires];
+  if (verb === Verb.Meta) return [];
+  if (verb === Verb.Exists) {
+    const source = declared.find((a) => a.verb === Verb.Source);
+    if (source !== undefined) return [...source.requires];
+  }
+  const every: string[] = [];
+  const add = (scope: string) => {
+    if (!every.includes(scope)) every.push(scope);
+  };
+  for (const a of declared) a.requires.forEach(add);
+  if (declared.length === 0) {
+    d.requires.forEach(add);
+    for (const a of d.actions) a.requires.forEach(add);
+  }
+  return every;
+}
+
+/**
+ * Core's `denial_message` for an unmet floor (without an alias hop, which a
+ * peer never sees): byte for byte, because other repos' tests match it.
+ */
+function denialMessage(scope: string, target: string): string {
+  if (!scope.endsWith("*")) {
+    return `capability does not grant \`${scope}\` (declared by \`${target}\`)`;
+  }
+  const prefix = scope.slice(0, -1);
+  if (prefix === "") {
+    return `capability does not grant \`${scope}\` (declared by \`${target}\`; ` +
+      "any grant at all satisfies it)";
+  }
+  return `capability does not grant \`${scope}\` (declared by \`${target}\`; ` +
+    `any grant under \`${prefix}\` satisfies it)`;
 }
 
 /** The serde shape of `ikigai_core::Description` (the JSON Meta face). */
@@ -748,6 +811,42 @@ export abstract class ServedDef {
     return descriptionJson(this.description());
   }
 
+  /**
+   * The capability scopes a request with `verb` must hold before this door
+   * is entered: its declared floor, read from {@linkcode description} by
+   * core's rule (`Description::required_scopes`). The verb's own `requires`
+   * when it declares the verb (a per-verb action's REPLACES the flat list);
+   * for an undeclared Exists, what Source requires (or, with no Source,
+   * everything declared); for any other undeclared verb, every scope
+   * declared anywhere; for Meta, nothing.
+   *
+   * ```ts
+   * import { assertEquals } from "@std/assert";
+   * import { family } from "./serve.ts";
+   * import { Verb } from "./wire.ts";
+   *
+   * const calendar = family("urn:ts:calendar")
+   *   .source({ requires: ["urn:cap:cal:read"] }, () => "")
+   *   .sink({ requires: ["urn:cap:cal:write"] }, () => "ok");
+   * assertEquals(calendar.requiredScopes(Verb.Sink), ["urn:cap:cal:write"]);
+   * assertEquals(calendar.requiredScopes(Verb.Exists), ["urn:cap:cal:read"]);
+   * assertEquals(calendar.requiredScopes(Verb.Meta), []);
+   * assertEquals(calendar.requiredScopes(Verb.Delete).length, 2);
+   * ```
+   */
+  requiredScopes(verb: Verb): string[] {
+    return requiredScopes(this.description(), verb);
+  }
+
+  /**
+   * The scopes in {@linkcode requiredScopes} that `capability` does not
+   * satisfy ({@linkcode Capability.satisfies}): empty exactly when this
+   * peer's floor admits the request.
+   */
+  unsatisfiedScopes(verb: Verb, capability: wire.Capability): string[] {
+    return this.requiredScopes(verb).filter((s) => !capability.satisfies(s));
+  }
+
   /** The human face (mirrors `ikigai_vocab::to_text`). */
   descriptionText(): string {
     return descriptionText(this.description());
@@ -790,8 +889,9 @@ export interface EndpointOptions {
    */
   cacheable?: boolean;
   /**
-   * The capability scopes the endpoint declares. Described, not enforced:
-   * this server accepts a call's capability without checking it per scope.
+   * The capability scopes the endpoint requires. Declared = enforced: a call
+   * whose carried capability does not satisfy every one is refused as a
+   * typed `Denied` before the handler runs (see {@linkcode Space.dispatch}).
    */
   requires?: string[];
 }
@@ -806,7 +906,7 @@ export class EndpointDef extends ServedDef {
   readonly output: string;
   /** Whether a result is marked `Expiry::Never` for the host to cache. */
   readonly cacheable: boolean;
-  /** The declared capability scopes (described, not enforced here). */
+  /** The declared capability scopes, enforced at dispatch. */
   readonly requires: readonly string[];
 
   /**
@@ -906,7 +1006,11 @@ export interface ActionOptions {
   args?: (string | ArgSpecInput | ArgSpec)[];
   /** The media type a plain result is sent as; `text/plain;charset=utf-8`. */
   output?: string;
-  /** Capability scopes this verb requires (declared per verb, as in core). */
+  /**
+   * Capability scopes this verb requires, enforced at dispatch. Declared per
+   * verb, as in core: a verb this door does not declare needs every scope
+   * the door declares (an undeclared Exists, what Source needs).
+   */
   requires?: string[];
 }
 
@@ -1284,10 +1388,21 @@ export class Space {
    * Answer one decoded Call. Failures come back as typed replies: an
    * unmatched target is `unresolved`, a handler's throw is its taxonomy
    * variant. Meta answers for any matched IRI before a handler sees it.
-   * `isCached` is always `false` (this peer keeps no cache); `issueAs` is
-   * resolved like `issue`, its capability not checked; a resolved
+   * `isCached` is always `false` (this peer keeps no cache); a resolved
    * `issueTraced` carries one span for the whole resolution.
    * `stripAlias` is the connection's hello mode, `null` for a direct call.
+   *
+   * **The capability floor runs here, on every call, before the door is
+   * entered** — core's declared-capability floor: every scope the door
+   * declares for the request's verb ({@linkcode ServedDef.requiredScopes})
+   * must be satisfied ({@linkcode wire.Capability.satisfies}), or the call is
+   * refused as a typed `Denied` with core's message text. `issueAs` and
+   * `issueTraced` are floored under the capability they carry. A plain
+   * `issue` carries none and resolves under ROOT, as the Rust IPC door
+   * resolves a plain `Issue` from its owner: the socket is reachable only by
+   * its owner (mode `0600`), so the owner's authority is root and a carried
+   * capability needs no clamp (root's clamp of `c` is `c`). Meta is never
+   * floored: self-description stays readable.
    */
   async dispatch(
     call: wire.Call,
@@ -1302,12 +1417,23 @@ export class Space {
     // Only a connection that DECLARED an alias mount tries stripped forms
     // first; a direct programmatic call (`null`) is a verbatim caller.
     const aliasFirst = stripAlias === true;
-    if (call.kind === "issue" || call.kind === "issueAs") {
-      return await this.#resolve(call.request, aliasFirst);
+    if (call.kind === "issue") {
+      return await this.#resolve(
+        call.request,
+        aliasFirst,
+        wire.Capability.root(),
+      );
+    }
+    if (call.kind === "issueAs") {
+      return await this.#resolve(call.request, aliasFirst, call.capability);
     }
     // issueTraced
     const started = Date.now();
-    const reply = await this.#resolve(call.request, aliasFirst);
+    const reply = await this.#resolve(
+      call.request,
+      aliasFirst,
+      call.capability,
+    );
     const ended = Date.now();
     if (reply.kind !== "resolved") return reply;
     const capability = call.capability;
@@ -1353,7 +1479,11 @@ export class Space {
     return null;
   }
 
-  async #resolve(request: Request, aliasFirst: boolean): Promise<Reply> {
+  async #resolve(
+    request: Request,
+    aliasFirst: boolean,
+    capability: wire.Capability,
+  ): Promise<Reply> {
     const hit = this.lookup(request.target, aliasFirst);
     if (hit === null) {
       // A real Unresolved (v7): the host-side client rebuilds the same
@@ -1368,6 +1498,19 @@ export class Space {
     // (`{x}` -> `probe`, core `select::describe_entry`), which no handler
     // would accept as a value.
     if (request.verb === Verb.Meta) return this.#meta(hit.def, request);
+    // The floor: declared = enforced, before the door is entered (and before
+    // a verb it does not answer is refused, as in core, where an undeclared
+    // verb needs every scope the door declares).
+    const lacking = hit.def.unsatisfiedScopes(request.verb, capability)[0];
+    if (lacking !== undefined) {
+      return {
+        kind: "errorTyped",
+        failure: {
+          kind: "denied",
+          message: denialMessage(lacking, request.target),
+        },
+      };
+    }
     return await hit.def.answer(request, hit.bindings);
   }
 

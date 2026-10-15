@@ -46,6 +46,7 @@ export {
   HelloMode,
   inline,
   InvalidArgumentError,
+  isDenyScope,
   MAX_FRAME,
   MIN_PROTOCOL_VERSION,
   MissingArgumentError,

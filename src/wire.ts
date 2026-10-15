@@ -44,6 +44,7 @@
  */
 
 import { DecodeError, Reader, Writer } from "./postcard.ts";
+import { isAbsoluteIri } from "./iri.ts";
 
 /**
  * Bumped in lockstep with the Rust `ikigai_wire::PROTOCOL_VERSION`. v5 era:
@@ -461,6 +462,144 @@ export class Capability {
   get isRoot(): boolean {
     return this.scopes === null;
   }
+
+  /**
+   * Whether this capability grants `scope`, matched EXACTLY
+   * (`Capability::allows` in core). Root grants everything. A scoped
+   * capability grants a scope it holds, except that an exclusion
+   * ({@linkcode isDenyScope}) is never granted, held or not, and a principal
+   * scope (`urn:cap:principal:<iri>`) is granted only as the ONE principal the
+   * capability carries: held beside another principal, neither is granted.
+   *
+   * This is the primitive, not the floor's predicate: a declared family scope
+   * (`urn:cap:net:*`) wants {@linkcode Capability.satisfies}, and this method
+   * answers `false` for every wildcard a scoped capability does not hold
+   * literally.
+   *
+   * ```ts
+   * import { assert } from "@std/assert";
+   * import { Capability } from "./wire.ts";
+   *
+   * const cap = Capability.scoped(["urn:cap:fs:read:/root", "urn:cap:fs:read:-/root/secret"]);
+   * assert(cap.allows("urn:cap:fs:read:/root"));
+   * assert(!cap.allows("urn:cap:fs:read:-/root/secret")); // held, but an exclusion
+   * assert(!cap.allows("urn:cap:fs:read:*")); // exact: the family form is `satisfies`
+   * assert(Capability.root().allows("urn:cap:anything"));
+   * ```
+   */
+  allows(scope: string): boolean {
+    const held = this.scopes;
+    if (held === null) return true;
+    if (!held.has(scope) || isDenyScope(scope)) return false;
+    const principal = principalIn(scope);
+    return principal === null || singlePrincipal(held) === principal;
+  }
+
+  /**
+   * Whether this capability satisfies one DECLARED scope, the way core's
+   * kernel decides it at its capability floor (`Capability::satisfies`,
+   * `select::cap_satisfies`): the predicate this peer's own floor uses.
+   *
+   * - A plain scope is {@linkcode Capability.allows}: exact.
+   * - A scope ending in `*` is the family form, a PRESENCE test: "holds ANY
+   *   scope under this prefix" (`urn:cap:net:*` is satisfied by a held
+   *   `urn:cap:net:example.com`; a held exclusion under the prefix counts
+   *   too, and the module's own rule then says which). A bare `*` is
+   *   satisfied by any held scope at all. Root satisfies every one; the
+   *   empty capability none.
+   *
+   * ```ts
+   * import { assert } from "@std/assert";
+   * import { Capability } from "./wire.ts";
+   *
+   * const perRoot = Capability.scoped(["urn:cap:browse:read:ikigai-core"]);
+   * assert(perRoot.satisfies("urn:cap:browse:read:*"));
+   * assert(!perRoot.allows("urn:cap:browse:read:*"));
+   * assert(perRoot.satisfies("urn:cap:browse:read:ikigai-core"));
+   * assert(!perRoot.satisfies("urn:cap:browse:read:ikigai-gonk"));
+   * assert(!perRoot.satisfies("urn:cap:browse:write:*"));
+   * assert(Capability.root().satisfies("urn:cap:net:*"));
+   * assert(!Capability.scoped([]).satisfies("urn:cap:net:*"));
+   * ```
+   */
+  satisfies(scope: string): boolean {
+    if (!scope.endsWith("*")) return this.allows(scope);
+    const held = this.scopes;
+    if (held === null) return true;
+    const prefix = scope.slice(0, -1);
+    for (const s of held) if (s.startsWith(prefix)) return true;
+    return false;
+  }
+}
+
+/**
+ * Whether `scope` is DENY-SHAPED: an exclusion (core's `is_deny_scope`). A
+ * leading `-` on the rule, in exactly one of two positions:
+ * `urn:cap:<family>:-<rule>` or `urn:cap:<family>:<qualifier>:-<rule>`, where
+ * `<family>` and `<qualifier>` are words (`[a-z0-9][a-z0-9_-]*`). Nothing
+ * deeper counts. {@linkcode Capability.allows} never grants an exclusion.
+ *
+ * ```ts
+ * import { assert } from "@std/assert";
+ * import { isDenyScope } from "./wire.ts";
+ *
+ * assert(isDenyScope("urn:cap:fs:read:-/root/secret"));
+ * assert(isDenyScope("urn:cap:net:-example.com"));
+ * assert(!isDenyScope("urn:cap:fs:read:notes:-x"));
+ * assert(!isDenyScope("urn:cap:net:*"));
+ * ```
+ */
+export function isDenyScope(scope: string): boolean {
+  if (!scope.startsWith("urn:cap:")) return false;
+  const rest = scope.slice("urn:cap:".length);
+  // Rust's `splitn(3, ':')`: family, second, and the remainder.
+  const first = rest.indexOf(":");
+  const family = first < 0 ? rest : rest.slice(0, first);
+  if (!isCapWord(family)) return false;
+  if (first < 0) return false;
+  const afterFamily = rest.slice(first + 1);
+  const second = afterFamily.indexOf(":");
+  const qualifier = second < 0 ? afterFamily : afterFamily.slice(0, second);
+  if (qualifier.startsWith("-")) return true;
+  if (!isCapWord(qualifier) || second < 0) return false;
+  return afterFamily.slice(second + 1).startsWith("-");
+}
+
+/** A family or qualifier segment: `[a-z0-9][a-z0-9_-]*` (core's `is_word`). */
+function isCapWord(segment: string): boolean {
+  return /^[a-z0-9][a-z0-9_-]*$/.test(segment);
+}
+
+/** The prefix of a principal scope (core's `PRINCIPAL_SCOPE_PREFIX`). */
+const PRINCIPAL_SCOPE_PREFIX = "urn:cap:principal:";
+
+/** The longest principal IRI carried, in UTF-8 bytes (`MAX_PRINCIPAL_LEN`). */
+const MAX_PRINCIPAL_LEN = 512;
+
+/**
+ * The principal `scope` carries if it is a well-formed principal scope (core's
+ * `principal_in` over `check_principal`), else `null`.
+ */
+function principalIn(scope: string): string | null {
+  if (!scope.startsWith(PRINCIPAL_SCOPE_PREFIX)) return null;
+  const iri = scope.slice(PRINCIPAL_SCOPE_PREFIX.length);
+  if (new TextEncoder().encode(iri).length > MAX_PRINCIPAL_LEN) return null;
+  if (!isAbsoluteIri(iri) || iri.includes("*") || isDenyScope(scope)) {
+    return null;
+  }
+  return iri;
+}
+
+/** The one principal `held` carries: `null` for none and for several. */
+function singlePrincipal(held: ReadonlySet<string>): string | null {
+  let found: string | null = null;
+  for (const scope of held) {
+    const principal = principalIn(scope);
+    if (principal === null) continue;
+    if (found !== null) return null;
+    found = principal;
+  }
+  return found;
 }
 
 /**
