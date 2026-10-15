@@ -1,9 +1,20 @@
 /**
- * The capability floor (ledger #1580): coverage semantics ported from core's
- * `capability.rs` tests (`is_deny_scope`, `allows`, `satisfies`, principals),
- * the per-verb requirement table from core's `Floor`, and the floor at
- * dispatch — an under-capable `issueAs` is refused typed before the handler
- * runs, a covering one runs, a plain `issue` resolves under root.
+ * The capability floor (ledger #1580), pinned with ikigai-core's own vectors
+ * (ledger #1583).
+ *
+ * Every coverage, floor and denial expectation in the first half comes from
+ * `capability_vectors.json`, a VERBATIM copy of ikigai-core's
+ * `crates/ikigai-vocab/tests/vectors/capability_vectors.json`. Core's own test
+ * recomputes that file (its denials by issuing through a kernel) and fails if
+ * it differs by a byte, and devtools' `vector-drift` compares this copy with
+ * core's, so do not edit or reformat it here (`deno.json` keeps it out of
+ * `deno fmt`): to pick up new vectors, copy the file again. Its sections, and
+ * what each asks of a face, are in core's `tests/vectors/README.md`.
+ *
+ * The second half is face-local: the public builders declare what core's table
+ * expects, and the floor at dispatch refuses an under-capable `issueAs` typed
+ * before the handler runs, runs a covering one, and resolves a plain `issue`
+ * under root.
  */
 
 import { assert, assertEquals, assertStrictEquals } from "@std/assert";
@@ -16,141 +27,136 @@ import {
   Verb,
 } from "../src/wire.ts";
 import { endpoint, family, Space } from "../src/serve.ts";
+import { type Json, VectorDoor, verbOf } from "./vector_door.ts";
 
 // ---------------------------------------------------------------------------
-// Coverage, from core's own capability tests
+// Core's shared capability vectors
 // ---------------------------------------------------------------------------
 
-Deno.test("deny shape pins every real form (core deny_shape_pins_every_real_form)", () => {
-  const denies = [
-    "urn:cap:fs:read:-/root/secret",
-    "urn:cap:fs:write:-/root/secret",
-    "urn:cap:fs:delete:-/root/secret",
-    "urn:cap:fs:list:-/root/secret",
-    "urn:cap:fs:read:-secret",
-    "urn:cap:fs:read:-/Users/brian/secrets",
-    "urn:cap:net:-example.com",
-    "urn:cap:net:-example.com:443",
-    "urn:cap:net:-example.com/admin",
-    "urn:cap:net:-example.com:443/admin",
-    "urn:cap:net:-[::1]:8080",
-    "urn:cap:net:-",
-  ];
-  for (const scope of denies) assert(isDenyScope(scope), scope);
-  const grants = [
-    "urn:cap:fs:read:/root",
-    "urn:cap:fs:read:/a-b",
-    "urn:cap:fs:read:a-b",
-    "urn:cap:fs:read:notes:-x",
-    "urn:cap:fs:read:/a:-b",
-    "urn:cap:fs:read:*",
-    "urn:cap:fs:read",
-    "urn:cap:net:example.com",
-    "urn:cap:net:example.com:-1",
-    "urn:cap:net:[::1]:8080",
-    "urn:cap:net:*",
-    "urn:cap:store:read:graph:urn:x:-y",
-    "urn:cap:ledger:read:my-ledger",
-    "urn:cap:dev-server:read",
-    "urn:cap:personal:calendar:read:freebusy",
-    "urn:cap:Fs:read:-x",
-    "urn:cap:-fs:read",
-    "urn:cap:",
-    "urn:cap",
-    "urn:other:fs:read:-x",
-    "",
-  ];
-  for (const scope of grants) assert(!isDenyScope(scope), scope);
-});
+/** A vector's capability: `"root"` or the list of scopes it holds. */
+type Held = "root" | string[];
 
-Deno.test("root allows everything; scoped allows only its scopes", () => {
-  const root = Capability.root();
-  assert(root.allows("urn:cap:anything:read"));
-  assert(root.allows("urn:cap:secret:read:-x"));
-  const cap = Capability.scoped(["urn:cap:personal:calendar:read:freebusy"]);
-  assert(cap.allows("urn:cap:personal:calendar:read:freebusy"));
-  assert(!cap.allows("urn:cap:personal:calendar:read:detail"));
-});
+const VECTORS: {
+  form: string;
+  deny_scopes: { scope: string; is_deny_scope: boolean }[];
+  coverage: {
+    capability: Held;
+    scope: string;
+    allows: boolean;
+    satisfies: boolean;
+  }[];
+  principals: { capability: Held; principal: string | null }[];
+  floors: {
+    name: string;
+    description: Json;
+    verbs: { verb: string; required_scopes: string[] }[];
+  }[];
+  denials: {
+    name: string;
+    target: string;
+    description: Json;
+    verb: string;
+    capability: Held;
+    denied: string | null;
+  }[];
+} = JSON.parse(
+  await Deno.readTextFile(
+    new URL("./capability_vectors.json", import.meta.url),
+  ),
+);
 
-Deno.test("an exclusion is never granted by exact match", () => {
-  const cap = Capability.scoped([
-    "urn:cap:fs:read:/root",
-    "urn:cap:secret:read:-x",
-  ]);
-  assert(cap.allows("urn:cap:fs:read:/root"));
-  assert(!cap.allows("urn:cap:secret:read:-x"), "held, but an exclusion");
-  assert(!cap.allows("urn:cap:fs:read:-/root"), "not held either");
-});
+const capability = (held: Held): Capability =>
+  held === "root" ? Capability.root() : Capability.scoped(held);
 
-Deno.test("satisfies is the kernel's predicate and allows stays exact", () => {
-  const perRoot = Capability.scoped(["urn:cap:browse:read:ikigai-core"]);
-  assert(!perRoot.allows("urn:cap:browse:read:*"));
-  assert(perRoot.satisfies("urn:cap:browse:read:*"));
-  const alice = Capability.scoped([
-    "urn:cap:x",
-    "urn:cap:principal:urn:example:person:alice",
-  ]);
-  const cases: [Capability, string][] = [
-    [perRoot, "urn:cap:browse:read:ikigai-core"],
-    [perRoot, "urn:cap:browse:read:ikigai-gonk"],
-    [perRoot, "urn:cap:browse:read"],
-    [
-      Capability.scoped(["urn:cap:fs:read:-/secret"]),
-      "urn:cap:fs:read:-/secret",
-    ],
-    [alice, "urn:cap:principal:urn:example:person:alice"],
-  ];
-  for (const [cap, scope] of cases) {
-    assertStrictEquals(cap.satisfies(scope), cap.allows(scope), scope);
+const PRINCIPAL = "urn:cap:principal:";
+
+Deno.test("the capability vectors are core's file, in the shape this test reads", () => {
+  assertStrictEquals(VECTORS.form, "ikigai:capability:v1");
+  for (
+    const key of [
+      "deny_scopes",
+      "coverage",
+      "principals",
+      "floors",
+      "denials",
+    ] as const
+  ) {
+    assert(VECTORS[key].length > 0, `no ${key}`);
   }
-  // A prefix presence test, not a sibling-family match.
-  assert(!perRoot.satisfies("urn:cap:browse:write:*"));
-  assert(!perRoot.satisfies("urn:cap:net:*"));
-  // An exclusion is present, so it satisfies the family form (ledger #858).
-  assert(
-    Capability.scoped(["urn:cap:fs:read:-/secret"]).satisfies(
-      "urn:cap:fs:read:*",
-    ),
-  );
-  assert(Capability.root().satisfies("urn:cap:net:*"));
-  assert(!Capability.scoped([]).satisfies("urn:cap:net:*"));
-  assert(perRoot.satisfies("urn:cap:*"));
-  // A bare `*` is satisfied by any held scope at all.
-  assert(perRoot.satisfies("*"));
-  assert(!Capability.scoped([]).satisfies("*"));
 });
 
-Deno.test("a principal is granted only as the capability's one principal", () => {
-  const p = (iri: string) => `urn:cap:principal:${iri}`;
-  const ALICE = "urn:example:person:alice";
-  const BOB = "urn:example:person:bob";
-  const one = Capability.scoped(["urn:cap:fs:read:/r", p(ALICE)]);
-  assert(one.allows(p(ALICE)));
-  assert(!one.allows(p(BOB)));
-  // Several principals are none; the other grants are untouched.
-  const both = Capability.scoped([p(ALICE), p(BOB), "urn:cap:x"]);
-  assert(!both.allows(p(ALICE)) && !both.allows(p(BOB)));
-  assert(both.allows("urn:cap:x"), "only the names are void");
-  // A wildcard is never an identity, and does not make a real one ambiguous.
-  for (const wild of ["urn:cap:*", "urn:cap:principal:*", p("urn:*")]) {
-    assert(!Capability.scoped([wild]).allows(p(ALICE)), wild);
-    assert(Capability.scoped([wild, p(ALICE)]).allows(p(ALICE)), wild);
+Deno.test("deny_scopes: isDenyScope is core's is_deny_scope", () => {
+  for (const row of VECTORS.deny_scopes) {
+    assertStrictEquals(isDenyScope(row.scope), row.is_deny_scope, row.scope);
   }
-  // A malformed principal scope is not a principal: held exactly, it is an
-  // ordinary grant, and it does not void a real principal beside it.
-  const odd = Capability.scoped([p("not an iri"), p(ALICE)]);
-  assert(odd.allows(p("not an iri")));
-  assert(odd.allows(p(ALICE)));
-  // Root holds every principal.
-  assert(Capability.root().allows(p(ALICE)));
-  // The declared presence test is satisfied by a held wildcard.
-  assert(
-    Capability.scoped(["urn:cap:principal:*"]).satisfies("urn:cap:principal:*"),
-  );
+});
+
+Deno.test("coverage: allows is exact and satisfies is the floor's predicate, as in core", () => {
+  for (const row of VECTORS.coverage) {
+    const cap = capability(row.capability);
+    const what = `${JSON.stringify(row.capability)} / ${row.scope}`;
+    assertStrictEquals(cap.allows(row.scope), row.allows, `allows ${what}`);
+    assertStrictEquals(
+      cap.satisfies(row.scope),
+      row.satisfies,
+      `satisfies ${what}`,
+    );
+  }
+});
+
+Deno.test("principals: the one principal a capability carries is granted", () => {
+  // This package has no public `principal()`: the principal is read only
+  // through `allows`, so what is checkable here is that the principal core
+  // names is granted. The refusals (several, a wildcard, an uncarriable IRI)
+  // are pinned through `coverage`'s principal-scope rows.
+  for (const row of VECTORS.principals) {
+    if (row.principal === null) continue;
+    assert(
+      capability(row.capability).allows(PRINCIPAL + row.principal),
+      JSON.stringify(row.capability).slice(0, 120),
+    );
+  }
+});
+
+Deno.test("floors: requiredScopes is core's Description::required_scopes", () => {
+  for (const floor of VECTORS.floors) {
+    const door = new VectorDoor(floor.description);
+    for (const row of floor.verbs) {
+      assertEquals(
+        door.requiredScopes(verbOf(row.verb)),
+        row.required_scopes,
+        `${floor.name} ${row.verb}`,
+      );
+    }
+  }
+});
+
+Deno.test("denials: the floor at dispatch refuses with the kernel's text", async () => {
+  for (const row of VECTORS.denials) {
+    const space = new Space([new VectorDoor(row.description, row.target)], {
+      stripAlias: false,
+    });
+    const call: Call = {
+      kind: "issueAs",
+      request: { verb: verbOf(row.verb), target: row.target, args: {} },
+      capability: capability(row.capability),
+    };
+    let refused: string | null = null;
+    try {
+      const reply = await space.dispatch(call);
+      if (reply.kind === "errorTyped" && reply.failure.kind === "denied") {
+        refused = reply.failure.message;
+      }
+    } catch {
+      // A vector door answers Meta only, so an admitted Source, Sink, Exists or
+      // Delete reaches it and throws: the floor let the request through.
+    }
+    assertStrictEquals(refused, row.denied, row.name);
+  }
 });
 
 // ---------------------------------------------------------------------------
-// The per-verb requirement table (core's `Floor`, `required_scopes`)
+// Face-local: the public builders declare what core's table expects
 // ---------------------------------------------------------------------------
 
 const noop = () => "ok";
