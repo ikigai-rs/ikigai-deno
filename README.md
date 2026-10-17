@@ -51,11 +51,19 @@ import by path or URL:
 import { connect, endpoint, serve } from "./src/mod.ts";
 ```
 
+### HTML escaping and URL rules (`./html`)
+
+`src/html.ts` (`@ikigai/wire/html`, zero dependencies) ports `ikigai_fn::html`:
+`htmlText`, `attr`, `urlSegment`, `safeHref` (the trimmed target, or `null` for
+"not a link") and `jsonAttr`. `tests/html_test.ts` runs every case of
+`tests/html_vectors.json`, a verbatim copy of ikigai-fn's
+`tests/vectors/html_vectors.json` at ikigai-fn commit 53d50c5 (ledger #1813).
+
 ### JSR: what is exported, and why `./zod` is not
 
-The published surface is exactly four entrypoints — `.` (`src/mod.ts`),
-`./wire`, `./client` and `./serve`. **`./zod` is left out of `exports` for
-good** (decided in ledger #1350): its signatures name zod's own types, which
+The published surface is exactly five entrypoints — `.` (`src/mod.ts`),
+`./wire`, `./client`, `./serve` and `./html`. **`./zod` is left out of `exports`
+for good** (decided in ledger #1350): its signatures name zod's own types, which
 `deno doc --lint` reports as `private-type-ref`, so it is not part of the
 published API and no `@ikigai/wire/zod` specifier will be offered. The file
 stays in the tree and is importable **by path** (`./src/zod.ts`), so the
@@ -72,7 +80,7 @@ has no Workflows permission — "a worker must not edit CI", `worker/README.md`
 §3), so instead of a new workflow step the suite the existing `Test` step
 already runs invokes the two tasks. The commands still live in ONE place — the
 `tasks` of `deno.json` — and the suite also pins the manifest facts they read
-(the JSR fields, the exact four exports, `./zod` absent, a module doc on every
+(the JSR fields, the exact five exports, `./zod` absent, a module doc on every
 entrypoint), each with a negative control that makes it fail.
 
 **The JSR score this package would get.** The dry run reports pass/fail, not a

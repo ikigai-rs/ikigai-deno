@@ -73,6 +73,7 @@
  */
 
 import { type Client, connect, ConnectionLost } from "../src/client.ts";
+import { htmlText } from "../src/html.ts";
 import {
   EndpointError,
   MissingArgumentError,
@@ -108,18 +109,8 @@ export const CONDITIONAL = "urn:iki:fn:conditional";
 /** How deep `$a` may transclude — `ikigai-fn`'s `COMPOSE_MAX_DEPTH`. */
 const MAX_DEPTH = 32;
 
-const ESCAPES: Record<string, string> = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '"': "&quot;",
-  "'": "&#39;",
-};
-
 /** `text`, safe in HTML text or an attribute quoted either way — what `$h` splices. */
-export function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (c) => ESCAPES[c]);
-}
+export const escapeHtml = htmlText;
 
 /**
  * `text` trimmed as Rust's `str::trim` trims it: every character with the
