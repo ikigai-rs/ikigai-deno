@@ -50,6 +50,7 @@ const EXPECTED_EXPORTS: Record<string, string> = {
   "./wire": "./src/wire.ts",
   "./client": "./src/client.ts",
   "./serve": "./src/serve.ts",
+  "./html": "./src/html.ts",
 };
 
 Deno.test("JSR: the manifest carries the publish fields", () => {
@@ -66,7 +67,7 @@ Deno.test("JSR: the manifest carries the publish fields", () => {
   );
 });
 
-Deno.test("JSR: exports are exactly the four entrypoints", () => {
+Deno.test("JSR: exports are exactly the five entrypoints", () => {
   assertEquals(manifest.exports, EXPECTED_EXPORTS);
 });
 
