@@ -18,6 +18,7 @@ const ROOT = new URL("..", import.meta.url);
 const VECTORS = [
   "tests/contract_vectors.json",
   "tests/capability_vectors.json",
+  "tests/validation_vectors.json",
   "tests/ttt_template_cases.txt",
 ];
 

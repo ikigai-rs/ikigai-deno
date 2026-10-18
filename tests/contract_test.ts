@@ -74,6 +74,7 @@ interface ParseCase {
 
 const VECTORS: {
   form: string;
+  form_v2: string;
   doors: Door[];
   contracts: { name: string; id: string; action: Json; contract: string }[];
   matches: { pattern: string; iris: { verb: string; match: string }[] }[];
@@ -91,6 +92,9 @@ function actionSpecs(d: DescriptionModel): ActionSpecModel[] {
       inputs: d.inputs,
       outputs: d.outputs,
       requires: d.requires,
+      groups: d.groups,
+      arguments: d.arguments,
+      outputFrom: d.outputFrom,
     }
   );
 }
@@ -101,6 +105,7 @@ const contractSegment = (id: string): string =>
 
 Deno.test("the vectors are core's file, in the shape this test reads", () => {
   assertStrictEquals(VECTORS.form, "ikigai:contract:v1");
+  assertStrictEquals(VECTORS.form_v2, "ikigai:contract:v2");
   for (const key of ["doors", "contracts", "matches", "parses"] as const) {
     assert(VECTORS[key].length > 0, `no ${key}`);
   }

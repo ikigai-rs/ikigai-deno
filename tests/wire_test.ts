@@ -270,6 +270,31 @@ Deno.test("args encode in BTreeMap key order regardless of insertion", () => {
   );
 });
 
+Deno.test("a request that names one argument twice is refused at decode", () => {
+  const twice = b(
+    [0x00], // Call::Issue
+    [0x00], // Verb::Source
+    [0x05],
+    "urn:x",
+    [0x02], // args: 2 entries, the same key
+    [0x01],
+    "a",
+    [0x01], // ArgRef::Inline
+    [0x01],
+    "1",
+    [0x01],
+    "a",
+    [0x01],
+    [0x01],
+    "2",
+  );
+  assertThrows(
+    () => wire.decodeCall(twice),
+    ProtocolError,
+    "`a` is given twice",
+  );
+});
+
 Deno.test("BTreeMap order is UTF-8 byte order, not UTF-16 code units", () => {
   // U+FF01 ( efbc81 in utf-8) sorts before U+10000 (f0908080 in utf-8), but
   // AFTER it by UTF-16 code units (ff01 > d800). The wire wants byte order.

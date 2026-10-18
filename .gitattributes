@@ -11,6 +11,7 @@
 # Named explicitly, so content detection can never decide them.
 tests/contract_vectors.json  text eol=lf
 tests/capability_vectors.json text eol=lf
+tests/validation_vectors.json text eol=lf
 tests/html_vectors.json text eol=lf
 tests/auth_vectors.json text eol=lf
 tests/ttt_template_cases.txt text eol=lf

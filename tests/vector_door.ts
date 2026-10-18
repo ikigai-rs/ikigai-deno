@@ -11,8 +11,13 @@ import {
   type ActionSpecModel,
   ArgSpec,
   type ArgSpecInput,
+  type ArgumentSet,
   type DescriptionModel,
+  type InputGroup,
+  type ListSeparator,
+  type OutputFrom,
   ServedDef,
+  type ValueNoteInput,
 } from "../src/serve.ts";
 import { type Reply, Verb } from "../src/wire.ts";
 
@@ -39,7 +44,28 @@ export function argSpec(json: Json): ArgSpec {
   if ("class" in json) input.class = json["class"] as string;
   if ("default" in json) input.default = json["default"] as string;
   if ("one_of" in json) input.oneOf = json["one_of"] as string[];
+  if ("examples" in json) input.examples = json["examples"] as string[];
+  if ("needs" in json) input.needs = json["needs"] as string[];
+  if ("list" in json) input.list = json["list"] as ListSeparator;
+  if ("values" in json) {
+    input.values = json["values"] as Record<string, ValueNoteInput>;
+  }
   return new ArgSpec(input);
+}
+
+/** The groups, argument set and `output_from` of a serde action or description. */
+function constructs(
+  json: Json,
+): Pick<ActionSpecModel, "groups" | "arguments" | "outputFrom"> {
+  const out: {
+    groups?: InputGroup[];
+    arguments?: ArgumentSet;
+    outputFrom?: OutputFrom;
+  } = {};
+  if ("groups" in json) out.groups = json["groups"] as InputGroup[];
+  if ("arguments" in json) out.arguments = json["arguments"] as ArgumentSet;
+  if ("output_from" in json) out.outputFrom = json["output_from"] as OutputFrom;
+  return out;
 }
 
 /** A serde `ikigai_core::ActionSpec` as this package's model. */
@@ -50,6 +76,7 @@ export function actionSpec(json: Json): ActionSpecModel {
     inputs: list<Json>(json, "inputs").map(argSpec),
     outputs: list<string>(json, "outputs"),
     requires: list<string>(json, "requires"),
+    ...constructs(json),
   };
 }
 
@@ -64,6 +91,7 @@ export function descriptionModel(json: Json): DescriptionModel {
     outputs: list<string>(json, "outputs"),
     requires: list<string>(json, "requires"),
     actions: list<Json>(json, "actions").map(actionSpec),
+    ...constructs(json),
   };
 }
 
