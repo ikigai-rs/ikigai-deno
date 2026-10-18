@@ -78,6 +78,7 @@ import * as wire from "./wire.ts";
 import {
   CacheStatus,
   Expiry,
+  type FailureClass,
   FrameStream,
   InvalidArgumentError,
   type Reply,
@@ -387,6 +388,12 @@ export interface ActionSpecModel {
   readonly arguments?: ArgumentSet;
   /** Where its output type comes from, when it is a pass-through. */
   readonly outputFrom?: OutputFrom;
+  /**
+   * The failure classes it states it may answer with, in declaration order
+   * (core 0.1.108). Absent says nothing; `[]` says "only the implied
+   * classes", which is stated and so moves the contract's digest.
+   */
+  readonly failures?: readonly FailureClass[];
 }
 
 /** `ikigai_core::Description`, the fields this peer emits. */
@@ -416,6 +423,8 @@ export interface DescriptionModel {
   readonly arguments?: ArgumentSet;
   /** Where the flat form's output type comes from. */
   readonly outputFrom?: OutputFrom;
+  /** The failure classes the flat form states; see {@linkcode ActionSpecModel.failures}. */
+  readonly failures?: readonly FailureClass[];
 }
 
 /**
@@ -433,6 +442,7 @@ function actionSpecs(d: DescriptionModel): ActionSpecModel[] {
       groups: d.groups,
       arguments: d.arguments,
       outputFrom: d.outputFrom,
+      failures: d.failures,
     }
   );
 }
@@ -494,11 +504,22 @@ function denialMessage(scope: string, target: string): string {
     `any grant under \`${prefix}\` satisfies it)`;
 }
 
+/**
+ * A failure class as `ik:mayFail`'s object, the vocabulary individual
+ * (`ikigai_vocab::failure_class_iri`): `retry-after` is `ik:RetryAfterFailure`.
+ */
+function failureClassTerm(failure: FailureClass): string {
+  const name = failure.split("-").map((w) => w[0].toUpperCase() + w.slice(1))
+    .join("");
+  return `ik:${name}Failure`;
+}
+
 /** The groups, argument set and `output_from` a contract carries, as serde writes them. */
 function constructsJson(
-  c: Pick<ActionSpecModel, "groups" | "arguments" | "outputFrom">,
+  c: Pick<ActionSpecModel, "groups" | "arguments" | "outputFrom" | "failures">,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
+  if (c.failures !== undefined) out["failures"] = [...c.failures];
   if (c.groups !== undefined && c.groups.length > 0) {
     out["groups"] = c.groups.map((g) => {
       const group: Record<string, unknown> = {
@@ -695,6 +716,9 @@ function descriptionTurtle(d: DescriptionModel): string {
   if (d.requires.length > 0) {
     preds.push(`ik:requires ${d.requires.map(capTerm).join(", ")}`);
   }
+  if (d.failures !== undefined && d.failures.length > 0) {
+    preds.push(`ik:mayFail ${d.failures.map(failureClassTerm).join(", ")}`);
+  }
 
   const extraNodes: string[] = [];
   for (const arg of d.inputs) {
@@ -718,6 +742,9 @@ function descriptionTurtle(d: DescriptionModel): string {
     }
     for (const cap of action.requires) {
       actionPreds.push(`ik:requires ${capTerm(cap)}`);
+    }
+    for (const failure of action.failures ?? []) {
+      actionPreds.push(`ik:mayFail ${failureClassTerm(failure)}`);
     }
     for (const arg of action.inputs) {
       const nodeIri = `${actionIri}:input:${nameFragment(arg.name)}`;

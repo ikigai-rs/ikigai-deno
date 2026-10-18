@@ -59,12 +59,12 @@ Deno.test("hono: the catalog lists the space", async () => {
   });
 });
 
-Deno.test("hono: an endpoint error maps to 502", async () => {
+Deno.test("hono: an unresolved target maps to 404", async () => {
   // A space serving ONLY urn:ts:hello — /upper then hits an unresolved
-  // target, which is how the smoke tests exercise the 502 mapping.
+  // target, which is how the smoke tests exercise the 404 mapping.
   await withApp(createApp, async ({ app }) => {
     const res = await app.request("/upper?text=abc");
-    assertStrictEquals(res.status, 502);
+    assertStrictEquals(res.status, 404);
     assert(
       (await res.text()).includes("no endpoint resolved for urn:ts:upper"),
     );

@@ -171,7 +171,57 @@ export class EndpointError extends WireError {
   display(): string {
     return `endpoint error: ${this.message}`;
   }
+
+  /**
+   * The failure class (`ikigai_core::Error::class`, core 0.1.108): what a
+   * caller or overlay may do about it. This base is `Endpoint`, which says
+   * nothing, so `"unknown"`; each subclass answers for its own variant.
+   * {@linkcode transient} is exactly `class() === "transient"`.
+   *
+   * ```ts
+   * import { EndpointError, RetryAfterError } from "./wire.ts";
+   * new EndpointError("boom").class(); // "unknown"
+   * new RetryAfterError(1500, "busy").class(); // "retry-after"
+   * new RetryAfterError(1500, "busy").transient; // false
+   * ```
+   */
+  class(): FailureClass {
+    return "unknown";
+  }
+
+  /**
+   * The error's kind as one stable lower-case word, carrying nothing from
+   * its payload (`ikigai_core::Error::kind`): `endpoint` here, and
+   * `not-found`, `retry-after`, … on the subclasses.
+   */
+  kind(): string {
+    return "endpoint";
+  }
 }
+
+/**
+ * The seven failure classes (`ikigai_core::FailureClass`, core 0.1.108), as
+ * the lower-case words the vocabulary and the shared vectors spell them.
+ */
+export type FailureClass =
+  | "transient"
+  | "retry-after"
+  | "over-budget"
+  | "denied"
+  | "refused"
+  | "permanent"
+  | "unknown";
+
+/** Every {@linkcode FailureClass}, in core's declaration order. */
+export const FAILURE_CLASSES: readonly FailureClass[] = [
+  "transient",
+  "retry-after",
+  "over-budget",
+  "denied",
+  "refused",
+  "permanent",
+  "unknown",
+];
 
 /**
  * The kernel found no binding for the target IRI (`WireFailure` /
@@ -196,6 +246,16 @@ export class UnresolvedError extends EndpointError {
   override display(): string {
     return this.message;
   }
+
+  /** The failure class: `permanent`. */
+  override class(): FailureClass {
+    return "permanent";
+  }
+
+  /** The kind word: `unresolved`. */
+  override kind(): string {
+    return "unresolved";
+  }
 }
 
 /** A required argument was absent (`Error::MissingArgument`). */
@@ -215,6 +275,16 @@ export class MissingArgumentError extends EndpointError {
   /** Rust's Display for this variant is the message itself. */
   override display(): string {
     return this.message;
+  }
+
+  /** The failure class: `permanent`. */
+  override class(): FailureClass {
+    return "permanent";
+  }
+
+  /** The kind word: `missing-argument`. */
+  override kind(): string {
+    return "missing-argument";
   }
 }
 
@@ -240,6 +310,16 @@ export class InvalidArgumentError extends EndpointError {
   override display(): string {
     return this.message;
   }
+
+  /** The failure class: `permanent`. */
+  override class(): FailureClass {
+    return "permanent";
+  }
+
+  /** The kind word: `invalid-argument`. */
+  override kind(): string {
+    return "invalid-argument";
+  }
 }
 
 /**
@@ -252,6 +332,16 @@ export class DeniedError extends EndpointError {
   override display(): string {
     return `denied: ${this.message}`;
   }
+
+  /** The failure class: `denied`. */
+  override class(): FailureClass {
+    return "denied";
+  }
+
+  /** The kind word: `denied`. */
+  override kind(): string {
+    return "denied";
+  }
 }
 
 /**
@@ -262,6 +352,16 @@ export class NotFoundError extends EndpointError {
   /** Rust's Display: `not found: {msg}`. */
   override display(): string {
     return `not found: ${this.message}`;
+  }
+
+  /** The failure class: `permanent`. */
+  override class(): FailureClass {
+    return "permanent";
+  }
+
+  /** The kind word: `not-found`. */
+  override kind(): string {
+    return "not-found";
   }
 }
 
@@ -283,6 +383,16 @@ export class ConflictError extends EndpointError {
   override display(): string {
     return `conflict: ${this.message}`;
   }
+
+  /** The failure class: `permanent`. */
+  override class(): FailureClass {
+    return "permanent";
+  }
+
+  /** The kind word: `conflict`. */
+  override kind(): string {
+    return "conflict";
+  }
 }
 
 /**
@@ -298,6 +408,16 @@ export class TimeoutError extends EndpointError {
   override display(): string {
     return `timeout: ${this.message}`;
   }
+
+  /** The failure class: `transient`. */
+  override class(): FailureClass {
+    return "transient";
+  }
+
+  /** The kind word: `timeout`. */
+  override kind(): string {
+    return "timeout";
+  }
 }
 
 /**
@@ -311,6 +431,173 @@ export class UnavailableError extends EndpointError {
   /** Rust's Display: `unavailable: {msg}`. */
   override display(): string {
     return `unavailable: ${this.message}`;
+  }
+
+  /** The failure class: `transient`. */
+  override class(): FailureClass {
+    return "transient";
+  }
+
+  /** The kind word: `unavailable`. */
+  override kind(): string {
+    return "unavailable";
+  }
+}
+
+/**
+ * A sub-request was refused because it would nest deeper than the kernel's
+ * budget (`Error::DepthExceeded`, wire tag 9) — **permanent**: the same
+ * request takes the same path.
+ */
+export class DepthExceededError extends EndpointError {
+  /** The depth the refused sub-request would have run at. */
+  readonly depth: number;
+  /** The canonical target it asked for. */
+  readonly target: string;
+
+  /** The message is Rust's rendering; `depth` and `target` cross the wire. */
+  constructor(depth: number, target: string) {
+    super(
+      `nesting budget exceeded: sub-request for ${target} would run at depth ${depth}`,
+    );
+    this.depth = depth;
+    this.target = target;
+  }
+
+  /** Rust's Display for this variant is the message itself. */
+  override display(): string {
+    return this.message;
+  }
+
+  /** The failure class: `permanent`. */
+  override class(): FailureClass {
+    return "permanent";
+  }
+
+  /** The kind word: `depth-exceeded`. */
+  override kind(): string {
+    return "depth-exceeded";
+  }
+}
+
+/**
+ * The same request may succeed, but not before a stated time
+ * (`Error::RetryAfter`, core 0.1.108; wire tag 10): a rate limit, a held-off
+ * peer. Class `retry-after`, and **not** {@linkcode transient}: a blind retry
+ * is the wrong answer; waiting {@linkcode delayMs} is the right one.
+ */
+export class RetryAfterError extends EndpointError {
+  /** How long to wait, in whole milliseconds (rounded up); `null` for "not now". */
+  readonly delayMs: number | null;
+  /** Why, in the endpoint's words. */
+  readonly detail: string;
+
+  /** `message` is the bare `detail`, as for the other message variants. */
+  constructor(delayMs: number | null, detail: string) {
+    super(detail);
+    this.delayMs = delayMs;
+    this.detail = detail;
+  }
+
+  /** Rust's Display: `retry after {ms} ms: {detail}`, or `retry later: {detail}`. */
+  override display(): string {
+    return this.delayMs === null
+      ? `retry later: ${this.detail}`
+      : `retry after ${this.delayMs} ms: ${this.detail}`;
+  }
+
+  /** The failure class: `retry-after`. */
+  override class(): FailureClass {
+    return "retry-after";
+  }
+
+  /**
+   * The edge's `Retry-After` header value: the delay in seconds, rounded up
+   * and never 0; `null` when there is no delay.
+   */
+  retryAfterSeconds(): number | null {
+    return this.delayMs === null
+      ? null
+      : Math.max(1, Math.ceil(this.delayMs / 1000));
+  }
+
+  /** The kind word: `retry-after`. */
+  override kind(): string {
+    return "retry-after";
+  }
+}
+
+/**
+ * A computation ran past a bound the caller holds (`Error::OverBudget`, wire
+ * tag 11). Class `over-budget`: the same input fails the same way under the
+ * same bound, so nothing in the chain retries it.
+ */
+export class OverBudgetError extends EndpointError {
+  /** Rust's Display: `over budget: {detail}`. */
+  override display(): string {
+    return `over budget: ${this.message}`;
+  }
+
+  /** The failure class: `over-budget`. */
+  override class(): FailureClass {
+    return "over-budget";
+  }
+
+  /** The kind word: `over-budget`. */
+  override kind(): string {
+    return "over-budget";
+  }
+}
+
+/**
+ * A remote authority refused the credential this endpoint presented
+ * (`Error::Refused`, wire tag 12). Distinct from {@linkcode DeniedError}
+ * (our own capability said no); the credential's holder may renew it once.
+ */
+export class RefusedError extends EndpointError {
+  /** Rust's Display: `refused: {msg}`. */
+  override display(): string {
+    return `refused: ${this.message}`;
+  }
+
+  /** The failure class: `refused`. */
+  override class(): FailureClass {
+    return "refused";
+  }
+
+  /** The kind word: `refused`. */
+  override kind(): string {
+    return "refused";
+  }
+}
+
+/**
+ * The endpoint does not do this (`Error::Unsupported`, wire tag 13): a verb
+ * it does not answer, or a facility the host lacks. **Permanent**.
+ */
+export class UnsupportedError extends EndpointError {
+  /** The verb that is not supported, when the refusal is about a verb. */
+  readonly verb: Verb | null;
+
+  /** `message` is the bare detail. */
+  constructor(detail: string, verb: Verb | null = null) {
+    super(detail);
+    this.verb = verb;
+  }
+
+  /** Rust's Display: `unsupported: {detail}`. */
+  override display(): string {
+    return `unsupported: ${this.message}`;
+  }
+
+  /** The failure class: `permanent`. */
+  override class(): FailureClass {
+    return "permanent";
+  }
+
+  /** The kind word: `unsupported`. */
+  override kind(): string {
+    return "unsupported";
   }
 }
 
@@ -868,7 +1155,10 @@ export type Call =
  * taxonomy addition is a WIRE VERSION event, not a silent core cascade.
  * Variant order is the postcard contract — append only:
  * unresolved=0, missingArgument=1, invalidArgument=2, endpoint=3, denied=4,
- * notFound=5, timeout=6, unavailable=7, conflict=8 (v8).
+ * notFound=5, timeout=6, unavailable=7, conflict=8 (v8), then the failure
+ * classes of core 0.1.108: depthExceeded=9, retryAfter=10, overBudget=11,
+ * refused=12, unsupported=13. This side only RECEIVES 9-13 (it decodes them);
+ * it never sends them, and negotiates no version for them.
  */
 export type WireFailure =
   | { readonly kind: "unresolved"; readonly iri: string }
@@ -883,7 +1173,24 @@ export type WireFailure =
   | { readonly kind: "notFound"; readonly message: string }
   | { readonly kind: "timeout"; readonly message: string }
   | { readonly kind: "unavailable"; readonly message: string }
-  | { readonly kind: "conflict"; readonly message: string };
+  | { readonly kind: "conflict"; readonly message: string }
+  | {
+    readonly kind: "depthExceeded";
+    readonly depth: number;
+    readonly target: string;
+  }
+  | {
+    readonly kind: "retryAfter";
+    readonly delayMs: number | null;
+    readonly detail: string;
+  }
+  | { readonly kind: "overBudget"; readonly detail: string }
+  | { readonly kind: "refused"; readonly message: string }
+  | {
+    readonly kind: "unsupported";
+    readonly verb: Verb | null;
+    readonly detail: string;
+  };
 
 /**
  * Rebuild the typed error a {@linkcode WireFailure} carries — the client's
@@ -922,6 +1229,16 @@ export function typedError(failure: WireFailure): EndpointError {
       return new UnavailableError(failure.message);
     case "conflict":
       return new ConflictError(failure.message);
+    case "depthExceeded":
+      return new DepthExceededError(failure.depth, failure.target);
+    case "retryAfter":
+      return new RetryAfterError(failure.delayMs, failure.detail);
+    case "overBudget":
+      return new OverBudgetError(failure.detail);
+    case "refused":
+      return new RefusedError(failure.message);
+    case "unsupported":
+      return new UnsupportedError(failure.detail, failure.verb);
   }
 }
 
@@ -960,6 +1277,15 @@ export function toWireFailure(error: unknown): WireFailure {
   }
   if (error instanceof ConflictError) {
     return { kind: "conflict", message: error.message };
+  }
+  if (
+    error instanceof DepthExceededError || error instanceof RetryAfterError ||
+    error instanceof OverBudgetError || error instanceof RefusedError ||
+    error instanceof UnsupportedError
+  ) {
+    // Tags 9-13 are receive-only here: a v8 peer gets the Display form inside
+    // Endpoint, as a Rust v8 server sends it.
+    return { kind: "endpoint", message: error.display() };
   }
   const message = error instanceof Error ? error.message : String(error);
   return { kind: "endpoint", message };
@@ -1177,6 +1503,11 @@ function putWireFailure(out: Writer, failure: WireFailure): void {
       out.varint(8);
       out.string(failure.message);
       break;
+    default:
+      // Tags 9-13 are receive-only on this side (see WireFailure).
+      throw new ProtocolError(
+        `this peer does not send wire failure \`${failure.kind}\``,
+      );
   }
 }
 
@@ -1430,6 +1761,25 @@ function getWireFailure(r: Reader): WireFailure {
       return { kind: "unavailable", message: r.string() };
     case 8:
       return { kind: "conflict", message: r.string() };
+    case 9:
+      return { kind: "depthExceeded", depth: r.varint(32), target: r.string() };
+    case 10: {
+      const delayMs = r.option() ? r.varint() : null;
+      return { kind: "retryAfter", delayMs, detail: r.string() };
+    }
+    case 11:
+      return { kind: "overBudget", detail: r.string() };
+    case 12:
+      return { kind: "refused", message: r.string() };
+    case 13: {
+      let verb: Verb | null = null;
+      if (r.option()) {
+        const index = r.varint(32);
+        if (!(index in Verb)) throw versionMismatch("Verb", index);
+        verb = index;
+      }
+      return { kind: "unsupported", verb, detail: r.string() };
+    }
     default:
       // The taxonomy is append-only, and every existing variant carries its
       // message as a leading string; read it so an unknown FUTURE variant
@@ -1548,13 +1898,13 @@ export function decodeCall(payload: Uint8Array): Call {
  *   kind: "cached",
  *   cached: true,
  * });
- * // Failure variant 9, which no version has defined yet, carrying "x".
- * assertEquals(decodeReply(new Uint8Array([5, 9, 1, 0x78])), {
+ * // Failure variant 14, which no version has defined yet, carrying "x".
+ * assertEquals(decodeReply(new Uint8Array([5, 14, 1, 0x78])), {
  *   kind: "errorTyped",
  *   failure: {
  *     kind: "endpoint",
  *     message:
- *       `wire error variant 9 (newer than protocol v${PROTOCOL_VERSION}): x`,
+ *       `wire error variant 14 (newer than protocol v${PROTOCOL_VERSION}): x`,
  *   },
  * });
  * ```

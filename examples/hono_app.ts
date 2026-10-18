@@ -109,7 +109,7 @@ export async function createApp(
   app.onError((err, c) => {
     // The peer's error arrives TYPED (wire v7), so the status is truthful:
     // a remote denial is a 403, a remote not-found a 404, bad input a 400,
-    // a transient failure a 503 — not a blanket 502.
+    // a transient failure a 503/504 — not a blanket 502.
     if (err instanceof EndpointError) {
       return c.text(err.message, httpStatus(err));
     }

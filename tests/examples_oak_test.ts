@@ -68,11 +68,11 @@ Deno.test("oak: the catalog lists the space", async () => {
   });
 });
 
-Deno.test("oak: an endpoint error maps to 502", async () => {
+Deno.test("oak: an unresolved target maps to 404", async () => {
   await withApp(createApp, async ({ app }) => {
     const res = await get(app, "/upper?text=abc");
     assert(res !== undefined);
-    assertStrictEquals(res.status, 502);
+    assertStrictEquals(res.status, 404);
     assert(
       (await res.text()).includes("no endpoint resolved for urn:ts:upper"),
     );
