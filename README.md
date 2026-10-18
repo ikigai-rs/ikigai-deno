@@ -59,10 +59,21 @@ import { connect, endpoint, serve } from "./src/mod.ts";
 `tests/html_vectors.json`, a verbatim copy of ikigai-fn's
 `tests/vectors/html_vectors.json` at ikigai-fn commit 53d50c5 (ledger #1813).
 
+### Authorization headers and base64 (`./auth`)
+
+`src/auth.ts` (`@ikigai/wire/auth`, zero dependencies) ports `ikigai_http::auth`
+and `ikigai_http::base64`: `basicAuthorization` (RFC 7617),
+`bearerAuthorization` (RFC 6750), `parseAuthorization`, `base64Encode` and
+`base64Decode` (padding required, canonical pad bits). A refusal throws an
+`AuthError` with a stable `code`; its message never holds the credential.
+`tests/auth_test.ts` runs every case of `tests/auth_vectors.json`, a verbatim
+copy of ikigai-http's `tests/vectors/auth_vectors.json` at ikigai-http commit
+ffadc89 (ledger #1862).
+
 ### JSR: what is exported, and why `./zod` is not
 
-The published surface is exactly five entrypoints — `.` (`src/mod.ts`),
-`./wire`, `./client`, `./serve` and `./html`. **`./zod` is left out of `exports`
+The published surface is exactly six entrypoints — `.` (`src/mod.ts`), `./wire`,
+`./client`, `./serve`, `./html` and `./auth`. **`./zod` is left out of `exports`
 for good** (decided in ledger #1350): its signatures name zod's own types, which
 `deno doc --lint` reports as `private-type-ref`, so it is not part of the
 published API and no `@ikigai/wire/zod` specifier will be offered. The file
@@ -80,7 +91,7 @@ has no Workflows permission — "a worker must not edit CI", `worker/README.md`
 §3), so instead of a new workflow step the suite the existing `Test` step
 already runs invokes the two tasks. The commands still live in ONE place — the
 `tasks` of `deno.json` — and the suite also pins the manifest facts they read
-(the JSR fields, the exact five exports, `./zod` absent, a module doc on every
+(the JSR fields, the exact six exports, `./zod` absent, a module doc on every
 entrypoint), each with a negative control that makes it fail.
 
 **The JSR score this package would get.** The dry run reports pass/fail, not a
