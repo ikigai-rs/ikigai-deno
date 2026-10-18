@@ -91,10 +91,17 @@ import {
   verbName,
 } from "./wire.ts";
 import { UriTemplate } from "./template.ts";
-import { contractIri, escapeIriFragment, nameFragment } from "./contract.ts";
+import {
+  contractIri,
+  escapeIriFragment,
+  groupSegment,
+  nameFragment,
+} from "./contract.ts";
 import { isAbsoluteIri } from "./iri.ts";
 
 export { TemplateError, UriTemplate } from "./template.ts";
+export { checkAction, GIVEN_TWICE } from "./check.ts";
+export type { ProposedArgs, Violation, ViolationKind } from "./check.ts";
 
 /** The `ik:` vocabulary namespace the Turtle Meta face writes against. */
 export const VOCAB_NS = "https://ikigai-rs.dev/ns#";
@@ -123,11 +130,78 @@ export interface ArgSpecInput {
   class?: string;
   /** The value the handler receives when the caller sends none. */
   default?: string;
-  /** The allowed values, when the argument is an enumeration. */
+  /**
+   * The allowed values, when the argument is an enumeration. An EMPTY list is
+   * meaningful: the input accepts no value (core's `"one_of": []`); leave
+   * `oneOf` out for an open-valued input.
+   */
   oneOf?: string[];
   /** `"argument"` (the default) or `"binding"`. */
   source?: InputSource;
+  /** Example values, each one the contract itself accepts. */
+  examples?: string[];
+  /** The inputs that must be given whenever this one is. */
+  needs?: string[];
+  /** The separator of a list-valued argument (one value, many items). */
+  list?: ListSeparator;
+  /** What particular `oneOf` values mean, keyed by value. */
+  values?: Record<string, ValueNoteInput>;
 }
+
+/** How a list-valued argument's items are separated in its one value. */
+export type ListSeparator =
+  | "comma"
+  | "whitespace"
+  | "comma-or-whitespace"
+  | "newline";
+
+/** What one `oneOf` value means (`ikigai_core::ValueNote`), as declared. */
+export interface ValueNoteInput {
+  /** What the value means. */
+  summary?: string;
+  /** Producer-owned tags. */
+  tags?: string[];
+  /** Inputs that must be given when this value is. */
+  needs?: string[];
+}
+
+/** What one `oneOf` value means (`ikigai_core::ValueNote`). */
+export interface ValueNote {
+  /** What the value means; `""` when none was given. */
+  readonly summary: string;
+  /** Producer-owned tags. */
+  readonly tags: readonly string[];
+  /** Inputs that must be given when this value is. */
+  readonly needs: readonly string[];
+}
+
+/** How an input group relates its members (`ikigai_core::GroupKind`). */
+export type GroupKind = "exactly-one" | "at-least-one" | "at-most-one";
+
+/** A relation between an action's inputs (`ikigai_core::InputGroup`). */
+export interface InputGroup {
+  /** How the members relate. */
+  readonly kind: GroupKind;
+  /** The member input names, a set. */
+  readonly members: readonly string[];
+  /** The member a pipe fills when none is named. */
+  readonly pipe?: string;
+}
+
+/**
+ * The names an action takes beyond its declared inputs
+ * (`ikigai_core::Arguments`); absent means closed. The serde shape:
+ * `{ open: "what the others mean" }` or `{ envelope: "carrier" }`.
+ */
+export type ArgumentSet = { readonly open: string } | {
+  readonly envelope: string;
+};
+
+/**
+ * Where an action's output type comes from when it is a pass-through
+ * (`ikigai_core::OutputFrom`): `{ input: name }` or `"origin"`.
+ */
+export type OutputFrom = { readonly input: string } | "origin";
 
 /**
  * One named input, mirroring `ikigai_core::ArgSpec`. The describe face built
@@ -149,6 +223,19 @@ export class ArgSpec {
   readonly oneOf: readonly string[];
   /** Whether the value is sent as an argument or bound from the IRI. */
   readonly source: InputSource;
+  /**
+   * Whether it declares an enumeration at all, so an empty `oneOf` means
+   * "accepts no value" rather than "open-valued".
+   */
+  readonly enumerated: boolean;
+  /** Example values the contract accepts. */
+  readonly examples: readonly string[];
+  /** The inputs that must be given whenever this one is. */
+  readonly needs: readonly string[];
+  /** Its list separator, or `null` for a single-valued input. */
+  readonly list: ListSeparator | null;
+  /** What particular `oneOf` values mean, in value (UTF-8 byte) order. */
+  readonly values: ReadonlyMap<string, ValueNote>;
 
   /**
    * From a bare name (a required `argument` with no summary), a spec object,
@@ -164,6 +251,11 @@ export class ArgSpec {
       this.default = spec.default;
       this.oneOf = spec.oneOf;
       this.source = spec.source;
+      this.enumerated = spec.enumerated;
+      this.examples = spec.examples;
+      this.needs = spec.needs;
+      this.list = spec.list;
+      this.values = spec.values;
       return;
     }
     const input: ArgSpecInput = typeof spec === "string"
@@ -178,7 +270,19 @@ export class ArgSpec {
     this.cls = input.class ?? null;
     this.default = input.default ?? null;
     this.oneOf = [...(input.oneOf ?? [])];
+    this.enumerated = input.oneOf !== undefined || this.oneOf.length > 0;
     this.source = input.source ?? "argument";
+    this.examples = [...(input.examples ?? [])];
+    this.needs = [...(input.needs ?? [])];
+    this.list = input.list ?? null;
+    const notes = input.values ?? {};
+    this.values = new Map(
+      wire.sortedUtf8(Object.keys(notes)).map((value) => [value, {
+        summary: notes[value].summary ?? "",
+        tags: [...(notes[value].tags ?? [])],
+        needs: [...(notes[value].needs ?? [])],
+      }]),
+    );
   }
 
   /**
@@ -194,7 +298,21 @@ export class ArgSpec {
     };
     if (this.cls !== null) out["class"] = this.cls;
     if (this.default !== null) out["default"] = this.default;
-    if (this.oneOf.length > 0) out["one_of"] = [...this.oneOf];
+    if (this.enumerated) out["one_of"] = [...this.oneOf];
+    if (this.examples.length > 0) out["examples"] = [...this.examples];
+    if (this.needs.length > 0) out["needs"] = [...this.needs];
+    if (this.list !== null) out["list"] = this.list;
+    if (this.values.size > 0) {
+      const values: Record<string, unknown> = {};
+      for (const [value, note] of this.values) {
+        const json: Record<string, unknown> = {};
+        if (note.summary) json["summary"] = note.summary;
+        if (note.tags.length > 0) json["tags"] = [...note.tags];
+        if (note.needs.length > 0) json["needs"] = [...note.needs];
+        values[value] = json;
+      }
+      out["values"] = values;
+    }
     return out;
   }
 }
@@ -263,6 +381,12 @@ export interface ActionSpecModel {
    * the flat `requires` for this verb rather than adding to it.
    */
   readonly requires: readonly string[];
+  /** Relations between this verb's inputs; none when absent. */
+  readonly groups?: readonly InputGroup[];
+  /** The names it takes beyond its inputs; closed when absent. */
+  readonly arguments?: ArgumentSet;
+  /** Where its output type comes from, when it is a pass-through. */
+  readonly outputFrom?: OutputFrom;
 }
 
 /** `ikigai_core::Description`, the fields this peer emits. */
@@ -286,6 +410,12 @@ export interface DescriptionModel {
   readonly requires: readonly string[];
   /** Explicit per-verb contracts; empty for the flat single-verb form. */
   readonly actions: readonly ActionSpecModel[];
+  /** Relations between the flat inputs; none when absent. */
+  readonly groups?: readonly InputGroup[];
+  /** The names the flat form takes beyond its inputs; closed when absent. */
+  readonly arguments?: ArgumentSet;
+  /** Where the flat form's output type comes from. */
+  readonly outputFrom?: OutputFrom;
 }
 
 /**
@@ -300,6 +430,9 @@ function actionSpecs(d: DescriptionModel): ActionSpecModel[] {
       inputs: d.inputs,
       outputs: d.outputs,
       requires: d.requires,
+      groups: d.groups,
+      arguments: d.arguments,
+      outputFrom: d.outputFrom,
     }
   );
 }
@@ -361,6 +494,30 @@ function denialMessage(scope: string, target: string): string {
     `any grant under \`${prefix}\` satisfies it)`;
 }
 
+/** The groups, argument set and `output_from` a contract carries, as serde writes them. */
+function constructsJson(
+  c: Pick<ActionSpecModel, "groups" | "arguments" | "outputFrom">,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (c.groups !== undefined && c.groups.length > 0) {
+    out["groups"] = c.groups.map((g) => {
+      const group: Record<string, unknown> = {
+        kind: g.kind,
+        members: [...g.members],
+      };
+      if (g.pipe !== undefined) group["pipe"] = g.pipe;
+      return group;
+    });
+  }
+  if (c.arguments !== undefined) out["arguments"] = { ...c.arguments };
+  if (c.outputFrom !== undefined) {
+    out["output_from"] = c.outputFrom === "origin"
+      ? "origin"
+      : { ...c.outputFrom };
+  }
+  return out;
+}
+
 /** The serde shape of `ikigai_core::Description` (the JSON Meta face). */
 function descriptionJson(d: DescriptionModel): Record<string, unknown> {
   const out: Record<string, unknown> = {
@@ -372,6 +529,7 @@ function descriptionJson(d: DescriptionModel): Record<string, unknown> {
     outputs: [...d.outputs],
   };
   if (d.requires.length > 0) out["requires"] = [...d.requires];
+  Object.assign(out, constructsJson(d));
   if (d.actions.length > 0) {
     out["actions"] = d.actions.map((a) => {
       const action: Record<string, unknown> = { verb: verbName(a.verb) };
@@ -381,6 +539,7 @@ function descriptionJson(d: DescriptionModel): Record<string, unknown> {
       }
       if (a.outputs.length > 0) action["outputs"] = [...a.outputs];
       if (a.requires.length > 0) action["requires"] = [...a.requires];
+      Object.assign(action, constructsJson(a));
       return action;
     });
   }
@@ -441,7 +600,7 @@ function descriptionTurtle(d: DescriptionModel): string {
       scope.startsWith("https://")
       ? iriTerm(scope)
       : lit(scope);
-  const inputPredicates = (arg: ArgSpec): string => {
+  const inputPredicates = (owner: string, arg: ArgSpec): string => {
     let node = `ik:inputName ${lit(arg.name)} ;\n` +
       `    ik:source ${lit(arg.source)} ;\n` +
       `    ik:required ${arg.required ? "true" : "false"}`;
@@ -449,7 +608,78 @@ function descriptionTurtle(d: DescriptionModel): string {
     if (arg.cls !== null) node += ` ;\n    ik:class ${iriTerm(arg.cls)}`;
     if (arg.default !== null) node += ` ;\n    ik:default ${lit(arg.default)}`;
     for (const value of arg.oneOf) node += ` ;\n    ik:oneOf ${lit(value)}`;
+    if (arg.enumerated && arg.oneOf.length === 0) {
+      node += " ;\n    ik:enumerated true";
+    }
+    for (const example of arg.examples) {
+      node += ` ;\n    ik:example ${lit(example)}`;
+    }
+    if (arg.list !== null) node += ` ;\n    ik:listSeparator ${lit(arg.list)}`;
+    for (const needed of arg.needs) {
+      node += ` ;\n    ik:needs <${owner}:input:${nameFragment(needed)}>`;
+    }
+    for (const value of arg.values.keys()) {
+      node += ` ;\n    ik:valueNote <${valueNodeIri(owner, arg.name, value)}>`;
+    }
     return node;
+  };
+  const valueNodeIri = (owner: string, input: string, value: string): string =>
+    `${owner}:input:${nameFragment(input)}:value:${nameFragment(value)}`;
+  // Core's `value_nodes`: one SKOS concept per value note.
+  const valueNodes = (owner: string, arg: ArgSpec): string[] => {
+    const skos = "http://www.w3.org/2004/02/skos/core#";
+    return [...arg.values].map(([value, note]) => {
+      const preds = [`a <${skos}Concept>`, `<${skos}notation> ${lit(value)}`];
+      if (note.summary) preds.push(`<${skos}definition> ${lit(note.summary)}`);
+      for (const tag of note.tags) preds.push(`ik:tag ${lit(tag)}`);
+      for (const needed of note.needs) {
+        preds.push(`ik:needs <${owner}:input:${nameFragment(needed)}>`);
+      }
+      return `<${valueNodeIri(owner, arg.name, value)}> ` +
+        preds.join(" ;\n    ") + " .";
+    });
+  };
+  // The argument set, `output_from` and groups a contract carries, hung off
+  // `owner` (the endpoint's node or the contract's): the predicates for it,
+  // and the group nodes.
+  const constructs = (
+    owner: string,
+    c: Pick<ActionSpecModel, "groups" | "arguments" | "outputFrom">,
+  ): { preds: string[]; groupPreds: string[]; nodes: string[] } => {
+    const preds: string[] = [];
+    if (c.arguments !== undefined) {
+      preds.push(
+        "open" in c.arguments
+          ? `ik:openArguments ${lit(c.arguments.open)}`
+          : `ik:envelope <${owner}:input:${
+            nameFragment(c.arguments.envelope)
+          }>`,
+      );
+    }
+    if (c.outputFrom !== undefined) {
+      preds.push(
+        c.outputFrom === "origin"
+          ? "ik:outputFrom ik:Origin"
+          : `ik:outputFrom <${owner}:input:${
+            nameFragment(c.outputFrom.input)
+          }>`,
+      );
+    }
+    const groupPreds: string[] = [];
+    const nodes: string[] = [];
+    for (const group of c.groups ?? []) {
+      const iri = `${owner}:${groupSegment(group)}`;
+      groupPreds.push(`ik:group <${iri}>`);
+      const gp = ["a ik:InputGroup", `ik:groupKind ${lit(group.kind)}`];
+      for (const member of group.members) {
+        gp.push(`ik:member <${owner}:input:${nameFragment(member)}>`);
+      }
+      if (group.pipe !== undefined) {
+        gp.push(`ik:pipe <${owner}:input:${nameFragment(group.pipe)}>`);
+      }
+      nodes.push(`<${iri}> ${gp.join(" ;\n    ")} .`);
+    }
+    return { preds, groupPreds, nodes };
   };
 
   const endpointIri = `urn:ikigai:endpoint:${nameFragment(d.id)}`;
@@ -470,8 +700,12 @@ function descriptionTurtle(d: DescriptionModel): string {
   for (const arg of d.inputs) {
     const nodeIri = `${endpointIri}:input:${nameFragment(arg.name)}`;
     preds.push(`ik:input <${nodeIri}>`);
-    extraNodes.push(`<${nodeIri}> ${inputPredicates(arg)} .`);
+    extraNodes.push(`<${nodeIri}> ${inputPredicates(endpointIri, arg)} .`);
+    extraNodes.push(...valueNodes(endpointIri, arg));
   }
+  const flat = constructs(endpointIri, d);
+  preds.push(...flat.preds, ...flat.groupPreds);
+  extraNodes.push(...flat.nodes);
 
   for (const action of actionSpecs(d)) {
     const verb = verbName(action.verb);
@@ -487,9 +721,13 @@ function descriptionTurtle(d: DescriptionModel): string {
     }
     for (const arg of action.inputs) {
       const nodeIri = `${actionIri}:input:${nameFragment(arg.name)}`;
-      extraNodes.push(`<${nodeIri}> ${inputPredicates(arg)} .`);
+      extraNodes.push(`<${nodeIri}> ${inputPredicates(actionIri, arg)} .`);
+      extraNodes.push(...valueNodes(actionIri, arg));
       actionPreds.push(`ik:input <${nodeIri}>`);
     }
+    const own = constructs(actionIri, action);
+    actionPreds.push(...own.preds, ...own.groupPreds);
+    extraNodes.push(...own.nodes);
     extraNodes.push(`<${actionIri}> ` + actionPreds.join(" ;\n    ") + " .");
   }
 

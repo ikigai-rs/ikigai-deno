@@ -40,7 +40,7 @@
 
 import { crypto } from "@std/crypto/crypto";
 import { type Verb, verbName } from "./wire.ts";
-import type { ActionSpecModel, ArgSpec } from "./serve.ts";
+import type { ActionSpecModel, ArgSpec, InputGroup } from "./serve.ts";
 
 /** The prefix of every match IRI: `urn:ikigai:match:{verb}:{pattern}`. */
 export const MATCH_PREFIX = "urn:ikigai:match:";
@@ -53,6 +53,9 @@ export const CONTRACT_PREFIX = "urn:ikigai:contract:";
 
 /** The domain tag that opens core's canonical form (`ikigai:contract:v1`). */
 const CONTRACT_FORM = "ikigai:contract:v1";
+
+/** The second form's tag (ledger #1547), chosen by content: see {@linkcode contractId}. */
+const CONTRACT_FORM_V2 = "ikigai:contract:v2";
 
 const utf8 = new TextEncoder();
 
@@ -162,6 +165,18 @@ export function matchIri(verb: Verb, pattern: string): string {
 }
 
 /**
+ * A group's node segment under its owner's IRI (core's
+ * `InputGroup::node_segment`): `group:{kind}:{m1},{m2}`, each member a NAME
+ * with `,` encoded too, the members sorted and deduplicated.
+ */
+export function groupSegment(group: InputGroup): string {
+  const members = sortedSet(
+    group.members.map((m) => nameFragment(m).replaceAll(",", "%2C")),
+  );
+  return `group:${group.kind}:${members.join(",")}`;
+}
+
+/**
  * Rust's `Ord` for `String`: byte-wise over UTF-8, which is code-point order.
  * JavaScript's `<` compares UTF-16 code units and disagrees above U+FFFF
  * (a surrogate pair sorts below U+E000..U+FFFF), so it cannot be used here.
@@ -223,6 +238,15 @@ function compareInput(a: CanonicalInput, b: CanonicalInput): number {
     compareList(a.oneOf, b.oneOf);
 }
 
+/** Rust's `Ord` for `Vec<u8>`. */
+function compareBytes(a: Uint8Array, b: Uint8Array): number {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return a.length - b.length;
+}
+
 /** Core's `crate::hashing`: every variable-length field length-prefixed. */
 class Canonical {
   #chunks: Uint8Array[] = [];
@@ -258,8 +282,19 @@ class Canonical {
     for (const v of sorted) this.str(v);
   }
 
-  /** The BLAKE3 digest of everything fed, as lower-case hex. */
-  digestHex(): string {
+  /** A set of separately encoded items: sorted bytewise, deduplicated, counted, each length-prefixed. */
+  items(items: readonly Canonical[]): void {
+    const encoded = items.map((i) => i.bytes()).sort(compareBytes)
+      .filter((x, i, all) => i === 0 || compareBytes(x, all[i - 1]) !== 0);
+    this.u64(encoded.length);
+    for (const item of encoded) {
+      this.u64(item.length);
+      this.#chunks.push(item);
+    }
+  }
+
+  /** Everything fed, concatenated. */
+  bytes(): Uint8Array<ArrayBuffer> {
     const total = this.#chunks.reduce((n, c) => n + c.length, 0);
     const all = new Uint8Array(total);
     let at = 0;
@@ -267,6 +302,12 @@ class Canonical {
       all.set(c, at);
       at += c.length;
     }
+    return all;
+  }
+
+  /** The BLAKE3 digest of everything fed, as lower-case hex. */
+  digestHex(): string {
+    const all = this.bytes();
     const digest = new Uint8Array(crypto.subtle.digestSync("BLAKE3", all));
     return Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
   }
@@ -293,8 +334,16 @@ function canonicalInput(input: ArgSpec): CanonicalInput {
  * outputs and the required scopes, each sorted and deduplicated. So the
  * order a contract was declared in never changes its identity, and the
  * endpoint id is part of it.
+ *
+ * **Two forms, chosen by content** (ledger #1547). A contract that uses a
+ * construct v1 cannot carry (an input's `needs`, `list`, value notes,
+ * examples or empty enumeration, a group, an open or envelope argument set,
+ * `output_from`) is digested under `ikigai:contract:v2` instead (core's
+ * `contract_id_v2`; the byte layout is in core's `tests/vectors/README.md`);
+ * every other contract keeps its v1 digest, so no existing IRI moves.
  */
 export function contractId(endpointId: string, spec: ActionSpecModel): string {
+  if (usesV2(spec)) return contractIdV2(endpointId, spec);
   const h = new Canonical();
   h.str(CONTRACT_FORM);
   h.str(endpointId);
@@ -314,6 +363,82 @@ export function contractId(endpointId: string, spec: ActionSpecModel): string {
   }
   h.set(spec.outputs);
   h.set(spec.requires);
+  return `b3:${h.digestHex()}`;
+}
+
+/** Whether a contract uses a construct only the v2 form carries (core's `uses_v2`). */
+function usesV2(spec: ActionSpecModel): boolean {
+  return (spec.groups?.length ?? 0) > 0 || spec.arguments !== undefined ||
+    spec.outputFrom !== undefined ||
+    spec.inputs.some((i) =>
+      i.needs.length > 0 || i.list !== null || i.values.size > 0 ||
+      i.examples.length > 0 || (i.enumerated && i.oneOf.length === 0)
+    );
+}
+
+/** One input in the v2 form: v1's fields, then the input-level additions. */
+function inputV2(input: ArgSpec): Canonical {
+  const c = new Canonical();
+  c.str(input.name);
+  c.str(input.summary);
+  c.u8(input.required ? 1 : 0);
+  c.u8(input.source === "binding" ? 1 : 0);
+  c.opt(input.cls);
+  c.opt(input.default);
+  c.set(input.oneOf);
+  c.set(input.needs);
+  c.opt(input.list);
+  c.u64(input.values.size);
+  for (const [value, note] of input.values) {
+    c.str(value);
+    c.str(note.summary);
+    c.set(note.tags);
+    c.set(note.needs);
+  }
+  c.u8(input.enumerated && input.oneOf.length === 0 ? 1 : 0);
+  c.set(input.examples);
+  return c;
+}
+
+/** One group in the v2 form: its kind word, member set and pipe member. */
+function groupV2(group: InputGroup): Canonical {
+  const c = new Canonical();
+  c.str(group.kind);
+  c.set(group.members);
+  c.opt(group.pipe ?? null);
+  return c;
+}
+
+/** The v2 canonical form (core's `contract_id_v2`). */
+function contractIdV2(endpointId: string, spec: ActionSpecModel): string {
+  const h = new Canonical();
+  h.str(CONTRACT_FORM_V2);
+  h.str(endpointId);
+  h.str(verbSegment(spec.verb));
+  h.str(spec.summary);
+  h.items(spec.inputs.map(inputV2));
+  h.set(spec.outputs);
+  h.set(spec.requires);
+  h.items((spec.groups ?? []).map(groupV2));
+  const args = spec.arguments;
+  if (args === undefined) {
+    h.u8(0);
+  } else if ("open" in args) {
+    h.u8(1);
+    h.str(args.open);
+  } else {
+    h.u8(2);
+    h.str(args.envelope);
+  }
+  const from = spec.outputFrom;
+  if (from === undefined) {
+    h.u8(0);
+  } else if (from === "origin") {
+    h.u8(2);
+  } else {
+    h.u8(1);
+    h.str(from.input);
+  }
   return `b3:${h.digestHex()}`;
 }
 

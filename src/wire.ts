@@ -1353,6 +1353,11 @@ function getRequest(r: Reader): Request {
   const count = r.varint();
   for (let i = 0; i < count; i++) {
     const name = r.string();
+    // An argument name is a map key: a repeat is not a second value, and
+    // keeping the last would let two peers read one frame as two requests.
+    if (Object.hasOwn(args, name)) {
+      throw new ProtocolError(`argument \`${name}\` is given twice`);
+    }
     args[name] = getArgRef(r);
   }
   return { verb, target, args };

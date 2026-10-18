@@ -239,7 +239,9 @@ What a served endpoint gets for free, because its describe face is real:
 
 - **Named-arg routing**: the host engine fetches the JSON Meta face and routes
   `who=Ada` by the declared ArgSpecs — names, `required`/optional, `class` (XSD
-  datatype or rdfs:Class IRI), `default`, `oneOf`.
+  datatype or rdfs:Class IRI), `default`, `oneOf` (`[]` accepts no value),
+  `examples`, `needs`, `list`, and per-value notes; `checkAction` applies the
+  same contract to a proposed call, as core's `ActionSpec::check` does.
 - **Catalog membership**: `list` on the host shows the Deno endpoints with their
   mount origin.
 - **Host-side caching**: declare `cacheable: true` on a pure function and the
