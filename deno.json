@@ -7,7 +7,8 @@
     "./wire": "./src/wire.ts",
     "./client": "./src/client.ts",
     "./serve": "./src/serve.ts",
-    "./html": "./src/html.ts"
+    "./html": "./src/html.ts",
+    "./auth": "./src/auth.ts"
   },
   "imports": {
     "zod": "npm:zod@^4.0",
@@ -26,7 +27,8 @@
     "exclude": [
       "tests/contract_vectors.json",
       "tests/capability_vectors.json",
-      "tests/html_vectors.json"
+      "tests/html_vectors.json",
+      "tests/auth_vectors.json"
     ]
   },
   "tasks": {
@@ -34,8 +36,8 @@
     "lint": "deno lint",
     "typecheck": "deno check src/mod.ts src/zod.ts examples/demo.ts examples/endpoints.ts examples/hono_app.ts examples/oak_app.ts examples/fresh_app.ts examples/tictactoe_store.ts examples/tictactoe_app.ts",
     "doc-check": "deno check --doc-only src README.md",
-    "doc-lint": "deno doc --lint src/mod.ts src/wire.ts src/client.ts src/serve.ts src/html.ts",
-    "doc-test": "deno test --doc src/wire.ts src/template.ts src/html.ts",
+    "doc-lint": "deno doc --lint src/mod.ts src/wire.ts src/client.ts src/serve.ts src/html.ts src/auth.ts",
+    "doc-test": "deno test --doc src/wire.ts src/template.ts src/html.ts src/auth.ts",
     "publish-check": "deno publish --dry-run --allow-dirty",
     "test": "deno test -A",
     "check": "deno task fmt-check && deno task lint && deno task typecheck && deno task doc-check && deno task doc-lint && deno task doc-test && deno task test"
