@@ -5,7 +5,7 @@
  * The pattern to notice: Oak adds almost nothing between HTTP and the wire —
  * a router entry per route, `searchParams` + `ctx.throw(400)` as the whole
  * input contract, and the handler body is one `kernel.source(...)`. Error
- * mapping is one middleware wrapping `next()` (wire errors become 502/503).
+ * mapping is one middleware wrapping `next()` (wire errors become 4xx/5xx by class).
  *
  * Run (direct, no Rust needed):
  *
@@ -93,8 +93,8 @@ export async function createApp(
 
   const app = new Application();
   // Wire errors arrive TYPED (v7) and become truthful statuses — a remote
-  // denial 403, a not-found 404, bad input 400, transient 503, the rest
-  // 502; an `HttpError` from `ctx.throw` keeps its own status (handling it
+  // denial 403, a not-found 404, bad input 400, transient 503/504, the rest
+  // 500; an `HttpError` from `ctx.throw` keeps its own status (handling it
   // here keeps Oak's default logger quiet); anything else stays Oak's
   // problem.
   app.use(async (ctx, next) => {

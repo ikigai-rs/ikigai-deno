@@ -95,6 +95,7 @@ function actionSpecs(d: DescriptionModel): ActionSpecModel[] {
       groups: d.groups,
       arguments: d.arguments,
       outputFrom: d.outputFrom,
+      failures: d.failures,
     }
   );
 }

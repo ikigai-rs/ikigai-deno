@@ -89,10 +89,10 @@ Deno.test("fresh: the catalog page lists the space", async () => {
   });
 });
 
-Deno.test("fresh: an endpoint error maps to 502", async () => {
+Deno.test("fresh: an unresolved target maps to 404", async () => {
   await withApp(makeApp, async ({ handler }) => {
     const res = await get(handler, "/upper?text=abc");
-    assertStrictEquals(res.status, 502);
+    assertStrictEquals(res.status, 404);
     assert(
       (await res.text()).includes("no endpoint resolved for urn:ts:upper"),
     );

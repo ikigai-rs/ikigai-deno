@@ -26,6 +26,7 @@
   "fmt": {
     "exclude": [
       "tests/contract_vectors.json",
+      "tests/failure_class_vectors.json",
       "tests/validation_vectors.json",
       "tests/capability_vectors.json",
       "tests/html_vectors.json",

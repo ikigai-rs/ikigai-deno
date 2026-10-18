@@ -118,7 +118,7 @@ export async function createApp(
 
   // Wire errors arrive TYPED (v7) and become truthful statuses, as
   // plain-text pages: 403 for a remote denial, 404 not-found, 400 bad
-  // input, 503 transient, 502 for the rest.
+  // input, 503 transient, 500 for the rest.
   app.use(async (ctx) => {
     try {
       return await ctx.next();

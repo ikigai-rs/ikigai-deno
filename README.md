@@ -286,14 +286,19 @@ instead of 502-for-everything — the three example apps share one mapping
 (`examples/http_status.ts`): `DeniedError` → 403, `NotFoundError` → 404,
 `ConflictError` → 409 (v8; 412 stays for a precondition the caller stated with
 `If-Match`), `InvalidArgumentError`/`MissingArgumentError` → 400, transient
-(timeout/unavailable) → 503, anything else → 502. It also means a **served**
-Deno endpoint can speak the taxonomy: throw `NotFoundError`/`DeniedError`/
-`TimeoutError`/`UnavailableError`/`ConflictError` from a handler and it crosses
-as that variant (a `ConflictError` reaches a v7 host as the plain endpoint text
-`conflict: …`, which is what a v7 kernel sends for the same error) — a Rust
-host's failover will treat your `UnavailableError` as transient and your
-`DeniedError` as final, and a zod validation failure crosses as a real
-`InvalidArgument` naming the field.
+(unavailable) → 503, `TimeoutError` → 504, `UnresolvedError` → 404, anything
+else (`Endpoint`) → 500. The failure classes of core 0.1.108 map too:
+`OverBudgetError` → 422, `RetryAfterError` → 429 (with `Retry-After` in seconds,
+rounded up, never 0), `RefusedError` → 502, `UnsupportedError` → 405 with a
+verb, else 501. Every error answers `class()` (`transient`, `retry-after`,
+`over-budget`, `denied`, `refused`, `permanent`, `unknown`); see `CHANGELOG.md`.
+It also means a **served** Deno endpoint can speak the taxonomy: throw
+`NotFoundError`/`DeniedError`/ `TimeoutError`/`UnavailableError`/`ConflictError`
+from a handler and it crosses as that variant (a `ConflictError` reaches a v7
+host as the plain endpoint text `conflict: …`, which is what a v7 kernel sends
+for the same error) — a Rust host's failover will treat your `UnavailableError`
+as transient and your `DeniedError` as final, and a zod validation failure
+crosses as a real `InvalidArgument` naming the field.
 
 ### zod → ArgSpec (declare the contract once)
 

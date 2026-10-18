@@ -19,7 +19,7 @@ import {
   ServedDef,
   type ValueNoteInput,
 } from "../src/serve.ts";
-import { type Reply, Verb } from "../src/wire.ts";
+import { type FailureClass, type Reply, Verb } from "../src/wire.ts";
 
 /** A JSON object, as a vector file holds it. */
 export type Json = Record<string, unknown>;
@@ -56,8 +56,12 @@ export function argSpec(json: Json): ArgSpec {
 /** The groups, argument set and `output_from` of a serde action or description. */
 function constructs(
   json: Json,
-): Pick<ActionSpecModel, "groups" | "arguments" | "outputFrom"> {
+): Pick<
+  ActionSpecModel,
+  "groups" | "arguments" | "outputFrom" | "failures"
+> {
   const out: {
+    failures?: FailureClass[];
     groups?: InputGroup[];
     arguments?: ArgumentSet;
     outputFrom?: OutputFrom;
@@ -65,6 +69,7 @@ function constructs(
   if ("groups" in json) out.groups = json["groups"] as InputGroup[];
   if ("arguments" in json) out.arguments = json["arguments"] as ArgumentSet;
   if ("output_from" in json) out.outputFrom = json["output_from"] as OutputFrom;
+  if ("failures" in json) out.failures = json["failures"] as FailureClass[];
   return out;
 }
 

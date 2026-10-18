@@ -592,16 +592,16 @@ Deno.test("a plain thrown error degrades to the endpoint variant", () => {
 });
 
 Deno.test("an unknown FUTURE taxonomy variant degrades to a named base error", () => {
-  // Append-only means variant 9+ belongs to a newer wire revision (8 is
-  // Conflict, v8). Every existing variant leads with its message string, so
+  // Append-only means variant 14+ belongs to a newer wire revision (8 is
+  // Conflict, v8; 9-13 the failure classes). Every existing variant leads with its message string, so
   // a same-shaped future variant decodes to a base EndpointError that NAMES
   // the unknown variant.
-  const payload = b([0x05], [0x09], [0x04], "next");
+  const payload = b([0x05], [0x0e], [0x04], "next");
   const decoded = wire.decodeReply(payload);
   assert(decoded.kind === "errorTyped");
   const error = typedError(decoded.failure);
   assertStrictEquals(error.constructor, EndpointError);
-  assert(error.message.includes("variant 9"), error.message);
+  assert(error.message.includes("variant 14"), error.message);
   assert(error.message.includes("next"), error.message);
 });
 
