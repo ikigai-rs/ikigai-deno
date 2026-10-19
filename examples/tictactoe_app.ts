@@ -40,8 +40,11 @@
  *   fragments, composed here.
  * - `POST {game}iki/tutorial/ttt/view/play/{x}/{y}` and `…/view/reset` — the
  *   write goes THROUGH the host (a Sink to `move:{x}:{y}` / `reset`), and the
- *   answer is `view:reply` composed here. A refused move is answered,
- *   not failed: the refusal's text, as the Rust view shows it.
+ *   answer is `view:reply` composed here. A move the state refuses (a taken
+ *   square, a finished game, the wrong mark) is a `409` whose `text/plain`
+ *   body is `conflict: {msg}`; `/static/conflict.js` swaps it into the
+ *   board's status region as text. Any other refusal (a square off the
+ *   board) is answered `200` with its text, as the Rust view shows it.
  *
  * On those paths the app answers what `ttt-host` answers — status and body,
  * the refusals included (a coordinate not in its plain form, a game the host
@@ -75,6 +78,7 @@
 import { type Client, connect, ConnectionLost } from "../src/client.ts";
 import { htmlText } from "../src/html.ts";
 import {
+  ConflictError,
   EndpointError,
   MissingArgumentError,
   UnresolvedError,
@@ -403,15 +407,18 @@ export class Game {
 
 /**
  * A write's answer: the write through the host, then `view:reply` with its
- * `message` — what the write said, or the refusal's text. The error is
- * rendered, never inspected.
+ * `message` — what the write said, or the refusal's text. A refusal is
+ * rendered, not inspected — except a typed {@linkcode ConflictError} (a taken
+ * square, a finished game, the wrong mark), which is the state refusing the
+ * move: it is NOT swallowed here but thrown, and {@linkcode handler} answers
+ * it `409` with `conflict: {msg}` as text/plain, as `ttt-host` does.
  */
 export async function reply(game: Game, write: string): Promise<string> {
   let message: string;
   try {
     message = await game.write(write);
   } catch (e) {
-    if (!(e instanceof EndpointError)) throw e;
+    if (!(e instanceof EndpointError) || e instanceof ConflictError) throw e;
     // Rust's Display, which is what the Rust view shows: it catches the
     // refusal inside the host. `message` alone drops the variant's prefix.
     message = e.display();
@@ -437,7 +444,10 @@ export const PAGE_CSP =
  * `f93bde4b6dacb82b085d88c8cf33c899eb3dd435dd64acd5e1e19c63be04f09b`; and
  * `ttt-host`'s `static/host.css` (the colors `ttt.css` reads, which the book
  * gets from mdbook), sha256
- * `79437443cd22e56d183ebf5b4a6de625e72354d38e8a39e54894bf0dc19f27ac`.
+ * `79437443cd22e56d183ebf5b4a6de625e72354d38e8a39e54894bf0dc19f27ac`. And
+ * `conflict.js`, from `crates/ttt-host/static/conflict.js` (ikigai-tutorial
+ * #138), which swaps a `409` into the status region; sha256
+ * `b6612b44e91a4f118919cc45e4ecb4b135503526e77a3af7a7a87f70f5e91e54`.
  */
 export const STATIC: Record<string, { file: string; type: string }> = {
   "/static/htmx-2.0.4.min.js": {
@@ -445,6 +455,7 @@ export const STATIC: Record<string, { file: string; type: string }> = {
     type: "text/javascript",
   },
   "/static/ttt.css": { file: "ttt.css", type: "text/css" },
+  "/static/conflict.js": { file: "conflict.js", type: "text/javascript" },
   "/static/host.css": { file: "host.css", type: "text/css" },
 };
 
@@ -481,6 +492,7 @@ export async function page(game: Game, others: string[]): Promise<string> {
 <link rel="stylesheet" href="/static/host.css">
 <link rel="stylesheet" href="/static/ttt.css">
 <script src="/static/htmx-2.0.4.min.js"></script>
+<script src="/static/conflict.js" defer></script>
 </head>
 <body>
 <main>

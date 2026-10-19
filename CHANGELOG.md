@@ -22,6 +22,18 @@
 - Interop against the real Rust door at ikigai-cli 0.1.66 is pending its
   publication (0.1.65 is the latest published).
 
+## Unreleased — a refused move is a 409 (ledger #1911, from #585 step 5)
+
+Changed:
+
+- **`examples/tictactoe_app.ts`**: a typed `ConflictError` from a move (a taken
+  square, a finished game, the wrong mark) is no longer swallowed by `reply()`;
+  the app answers `409` with the `text/plain` body `conflict: {msg}`, as
+  `ttt-host` does (ikigai-tutorial #138). Off the board stays an
+  `InvalidArgument`, answered `200` with its text. The page loads
+  `/static/conflict.js` (vendored from the tutorial's host), which swaps a 409
+  into the status region as text; the next successful play restores the status.
+
 ## Unreleased — the core 0.1.108 failure classes (ledger #1897, step 2 of #1546)
 
 New:
