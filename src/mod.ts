@@ -39,8 +39,10 @@ export {
   ConflictError,
   content,
   decodeErrorMessage,
+  decodeIssueWith,
   DeniedError,
   DepthExceededError,
+  encodeIssueWith,
   EndpointError,
   EofError,
   Expiry,
@@ -49,6 +51,7 @@ export {
   inline,
   InvalidArgumentError,
   isDenyScope,
+  ISSUE_WITH_SINCE_VERSION,
   MAX_FRAME,
   MIN_PROTOCOL_VERSION,
   MissingArgumentError,
@@ -78,6 +81,7 @@ export type {
   FailureClass,
   Hello,
   Inline,
+  IssueWith,
   Reference,
   Reply,
   Request,
@@ -95,7 +99,7 @@ export {
   DEFAULT_TIMEOUT_MS,
   defaultSocketPath,
 } from "./client.ts";
-export type { Args, ArgValue, ConnectOptions } from "./client.ts";
+export type { Args, ArgValue, ClientRun, ConnectOptions } from "./client.ts";
 
 export {
   CONTRACT_PREFIX,
@@ -113,6 +117,8 @@ export {
   EndpointDef,
   Family,
   family,
+  NO_RUN,
+  runContext,
   serve,
   ServedDef,
   Server,
@@ -140,6 +146,7 @@ export type {
   ListSeparator,
   OutputFrom,
   ProposedArgs,
+  RunContext,
   SourceOptions,
   ValueNote,
   ValueNoteInput,

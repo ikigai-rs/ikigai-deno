@@ -123,6 +123,23 @@ function throwFailure(reply: Reply): void {
   }
 }
 
+/**
+ * What a run carries to the server with each call (wire v9 `IssueWith`): a
+ * retry budget and a deadline. Sent only to a peer that negotiated v9, and
+ * only when one of the two is set; otherwise the pre-v9 bytes go out.
+ */
+export interface ClientRun {
+  /** The retry budget remaining (a `u32`), or `null` for none. */
+  retries?: number | null;
+  /**
+   * The run's deadline as an instant on THIS process's clock (ms since the
+   * Unix epoch), or `null` for none. The wire carries TIME LEFT, computed at
+   * each send in whole ms, never this instant: the server adds it to its own
+   * now.
+   */
+  deadline?: number | null;
+}
+
 /** How {@linkcode connect} dials; every field is optional. */
 export interface ConnectOptions {
   /**
@@ -130,6 +147,11 @@ export interface ConnectOptions {
    * the server clamps to its authenticated principal).
    */
   capability?: Capability;
+  /**
+   * The run this client's calls belong to; see {@linkcode ClientRun}.
+   * Settable later through {@linkcode Client.run}.
+   */
+  run?: ClientRun;
   /**
    * Bounds each round trip's silence; `null` waits forever. Default
    * {@linkcode DEFAULT_TIMEOUT_MS}.
@@ -160,6 +182,8 @@ export class Client {
   #path: string | null;
   #mode: HelloMode;
   #serverVersion: number;
+  /** The retry budget and deadline each call carries to a v9 peer. */
+  run: ClientRun | null;
   /**
    * When set, requests go as `Call::IssueAs` under this capability (which
    * the server clamps to its authenticated principal).
@@ -179,6 +203,7 @@ export class Client {
       capability?: Capability;
       timeoutMs?: number | null;
       serverVersion?: number;
+      run?: ClientRun;
       /** Enables redial-on-loss; {@linkcode connect} always passes it. */
       path?: string;
       /** The hello mode a redial replays. Default verbatim. */
@@ -192,6 +217,7 @@ export class Client {
       : options.timeoutMs;
     this.capability = options.capability ?? null;
     this.#serverVersion = options.serverVersion ?? wire.PROTOCOL_VERSION;
+    this.run = options.run ?? null;
     this.#path = options.path ?? null;
     this.#mode = options.mode ?? HelloMode.Verbatim;
   }
@@ -256,7 +282,7 @@ export class Client {
       }
       let sent = false;
       try {
-        await this.#stream.writeFrame(wire.encodeCall(call));
+        await this.#stream.writeFrame(wire.encodeCall(this.#shape(call)));
         sent = true;
         return wire.decodeReply(await this.#stream.readFrame());
       } catch (e) {
@@ -279,6 +305,36 @@ export class Client {
       await this.#redial();
       redialed = true;
     }
+  }
+
+  /**
+   * The call as the negotiated version carries it: with a run (a pool or a
+   * deadline) and a v9 peer, `issueWith`; otherwise the call unchanged, so
+   * a v8 peer or a run-less client sends the exact pre-v9 bytes.
+   */
+  #shape(call: Call): Call {
+    const retries = this.run?.retries ?? null;
+    const deadline = this.run?.deadline ?? null;
+    if (
+      this.#serverVersion < wire.ISSUE_WITH_SINCE_VERSION ||
+      (retries === null && deadline === null)
+    ) return call;
+    if (
+      call.kind !== "issue" && call.kind !== "issueAs" &&
+      call.kind !== "issueTraced"
+    ) return call;
+    return {
+      kind: "issueWith",
+      request: call.request,
+      capability: call.kind === "issue" ? Capability.root() : call.capability,
+      with: {
+        trace: call.kind === "issueTraced" ? call.context : null,
+        retries,
+        timeLeftMs: deadline === null
+          ? null
+          : Math.max(0, Math.floor(deadline - Date.now())),
+      },
+    };
   }
 
   /** Serialize round trips: the wire is one call/reply at a time. */
@@ -481,6 +537,7 @@ export async function connect(
     capability: options.capability,
     timeoutMs: options.timeoutMs,
     serverVersion,
+    run: options.run,
     path: socketPath,
     mode,
   });

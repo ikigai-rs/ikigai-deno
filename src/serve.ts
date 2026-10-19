@@ -344,6 +344,42 @@ export type HandlerResult =
 export type HandlerArgs = Record<string, string | Uint8Array>;
 
 /**
+ * What the caller's run carries to a handler (wire v9 `IssueWith`), the way
+ * the Rust `Invocation` exposes it. A peer that sends none gets
+ * {@linkcode NO_RUN}: no budget, no deadline.
+ */
+export interface RunContext {
+  /** The retry budget remaining (the pool), or `null` when none was sent. */
+  readonly retriesLeft: number | null;
+  /**
+   * The run's deadline as an instant on THIS process's clock (ms since the
+   * Unix epoch): the server's own now when the call arrived plus the time
+   * left the peer sent. `null` when none was sent.
+   */
+  readonly deadline: number | null;
+  /** Milliseconds left until {@linkcode RunContext.deadline}, floored at 0. */
+  timeLeftMs(): number | null;
+}
+
+/** Build the run context of a call that arrived at `now` (ms since epoch). */
+export function runContext(
+  retries: number | null,
+  timeLeftMs: number | null,
+  now: number = Date.now(),
+): RunContext {
+  const deadline = timeLeftMs === null ? null : now + timeLeftMs;
+  return {
+    retriesLeft: retries,
+    deadline,
+    timeLeftMs: () =>
+      deadline === null ? null : Math.max(0, deadline - Date.now()),
+  };
+}
+
+/** The run context of a call that carried none. */
+export const NO_RUN: RunContext = runContext(null, null);
+
+/**
  * The function behind a verb. A thrown typed error (`NotFoundError`,
  * `DeniedError`, …) crosses the wire as that variant; anything else thrown
  * crosses as an `Endpoint` failure with its message. A string or bytes
@@ -353,11 +389,13 @@ export type HandlerArgs = Record<string, string | Uint8Array>;
  */
 export type Handler = (
   args: HandlerArgs,
+  run: RunContext,
 ) => HandlerResult | Promise<HandlerResult>;
 
 /** An explicit Exists answers yes or no. */
 export type ExistsHandler = (
   args: HandlerArgs,
+  run: RunContext,
 ) => boolean | Promise<boolean>;
 
 // ---------------------------------------------------------------------------
@@ -941,10 +979,11 @@ async function runHandler(
   output: string,
   cacheable: boolean,
   mutating: boolean,
+  run: RunContext,
 ): Promise<Reply> {
   let result: HandlerResult;
   try {
-    result = await handler(args);
+    result = await handler(args, run);
   } catch (e) {
     // A handler failure crosses typed, never as a hang: the typed classes
     // map to their own taxonomy variants (a thrown NotFoundError IS a
@@ -1048,6 +1087,7 @@ export abstract class ServedDef {
   abstract answer(
     request: Request,
     bindings: Readonly<Record<string, string>>,
+    run?: RunContext,
   ): Promise<Reply>;
 
   /** The verbs this door answers, for a refusal that names them. */
@@ -1221,6 +1261,7 @@ export class EndpointDef extends ServedDef {
   async answer(
     request: Request,
     bindings: Readonly<Record<string, string>>,
+    run: RunContext = NO_RUN,
   ): Promise<Reply> {
     if (request.verb === Verb.Exists) {
       // The flat form's Exists is "the name is bound" — unchanged since L0,
@@ -1237,6 +1278,7 @@ export class EndpointDef extends ServedDef {
       this.output,
       this.cacheable,
       false,
+      run,
     );
   }
 }
@@ -1493,15 +1535,16 @@ export class Family extends ServedDef {
   async answer(
     request: Request,
     bindings: Readonly<Record<string, string>>,
+    run: RunContext = NO_RUN,
   ): Promise<Reply> {
     const action = this.#actions.get(request.verb);
     if (request.verb === Verb.Exists) {
       if (action !== undefined) {
-        return await this.#explicitExists(action, request, bindings);
+        return await this.#explicitExists(action, request, bindings, run);
       }
       const source = this.#actions.get(Verb.Source);
       if (source === undefined) return this.refuse(request.verb);
-      const reply = await this.#run(source, request, bindings);
+      const reply = await this.#run(source, request, bindings, run);
       if (reply.kind === "resolved") {
         return booleanReply(true, source.cacheable);
       }
@@ -1511,13 +1554,14 @@ export class Family extends ServedDef {
       return reply;
     }
     if (action === undefined) return this.refuse(request.verb);
-    return await this.#run(action, request, bindings);
+    return await this.#run(action, request, bindings, run);
   }
 
   async #run(
     action: ActionDef,
     request: Request,
     bindings: Readonly<Record<string, string>>,
+    run: RunContext,
   ): Promise<Reply> {
     const routed = routeArgs(bindings, action.args, request);
     if ("refused" in routed) return routed.refused;
@@ -1528,6 +1572,7 @@ export class Family extends ServedDef {
       action.output,
       action.cacheable,
       mutating,
+      run,
     );
   }
 
@@ -1535,11 +1580,15 @@ export class Family extends ServedDef {
     action: ActionDef,
     request: Request,
     bindings: Readonly<Record<string, string>>,
+    run: RunContext,
   ): Promise<Reply> {
     const routed = routeArgs(bindings, action.args, request);
     if ("refused" in routed) return routed.refused;
     try {
-      return booleanReply(await action.exists!(routed.args), action.cacheable);
+      return booleanReply(
+        await action.exists!(routed.args, run),
+        action.cacheable,
+      );
     } catch (e) {
       return { kind: "errorTyped", failure: toWireFailure(e) };
     }
@@ -1692,12 +1741,26 @@ export class Space {
     if (call.kind === "issueAs") {
       return await this.#resolve(call.request, aliasFirst, call.capability);
     }
-    // issueTraced
+    // issueTraced, or issueWith: the run context is built at THIS side's now
+    // (the peer sent time LEFT, never an instant), and a trace is recorded
+    // only when the call carries one.
+    const run = call.kind === "issueWith"
+      ? runContext(call.with.retries, call.with.timeLeftMs)
+      : NO_RUN;
+    if (call.kind === "issueWith" && call.with.trace === null) {
+      return await this.#resolve(
+        call.request,
+        aliasFirst,
+        call.capability,
+        run,
+      );
+    }
     const started = Date.now();
     const reply = await this.#resolve(
       call.request,
       aliasFirst,
       call.capability,
+      run,
     );
     const ended = Date.now();
     if (reply.kind !== "resolved") return reply;
@@ -1748,6 +1811,7 @@ export class Space {
     request: Request,
     aliasFirst: boolean,
     capability: wire.Capability,
+    run: RunContext = NO_RUN,
   ): Promise<Reply> {
     const hit = this.lookup(request.target, aliasFirst);
     if (hit === null) {
@@ -1776,7 +1840,7 @@ export class Space {
         },
       };
     }
-    return await hit.def.answer(request, hit.bindings);
+    return await hit.def.answer(request, hit.bindings, run);
   }
 
   #meta(d: ServedDef, request: Request): Reply {

@@ -29,8 +29,8 @@ import {
   FAILURE_CLASSES,
   type FailureClass,
   OverBudgetError,
-  ProtocolError,
   RefusedError,
+  replyForPeer,
   RetryAfterError,
   toWireFailure,
   typedError,
@@ -206,23 +206,32 @@ Deno.test("an unknown tag still decodes as Endpoint(display)", () => {
   assert(reply.failure.message.endsWith("from the future"));
 });
 
-Deno.test("a new class thrown from a handler crosses as Endpoint(display), as to a v8 peer", () => {
-  assertEquals(toWireFailure(new RetryAfterError(1500, "busy")), {
-    kind: "endpoint",
-    message: "retry after 1500 ms: busy",
+Deno.test("a new class thrown from a handler crosses typed to a v9 peer, as Endpoint(display) to a v8 one", () => {
+  const retry = toWireFailure(new RetryAfterError(1500, "busy"));
+  assertEquals(retry, { kind: "retryAfter", delayMs: 1500, detail: "busy" });
+  const unsupported = toWireFailure(new UnsupportedError("no", Verb.Sink));
+  assertEquals(unsupported, {
+    kind: "unsupported",
+    verb: Verb.Sink,
+    detail: "no",
   });
-  assertEquals(toWireFailure(new UnsupportedError("no", Verb.Sink)), {
-    kind: "endpoint",
-    message: "unsupported: no",
-  });
-  assertThrows(
-    () =>
-      encodeReply({
-        kind: "errorTyped",
-        failure: { kind: "overBudget", detail: "x" },
-      }),
-    ProtocolError,
+  const reply = (failure: WireFailure) =>
+    ({ kind: "errorTyped", failure }) as const;
+  assertEquals(
+    replyForPeer(reply(retry), 8),
+    reply({
+      kind: "endpoint",
+      message: "retry after 1500 ms: busy",
+    }),
   );
+  assertEquals(
+    replyForPeer(reply(unsupported), 7),
+    reply({
+      kind: "endpoint",
+      message: "unsupported: no",
+    }),
+  );
+  assertEquals(replyForPeer(reply(retry), 9), reply(retry));
 });
 
 Deno.test("an unsupported verb index this side does not know is refused", () => {

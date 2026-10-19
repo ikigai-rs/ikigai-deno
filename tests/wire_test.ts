@@ -385,15 +385,16 @@ Deno.test('the downgrade to a v7 peer: Conflict("x") becomes Endpoint("conflict:
   assertStrictEquals(wire.replyForPeer(denied, 7), denied);
 });
 
-Deno.test("version negotiation: v7 and v8 are served at their own version, v6 and v9 are refused", () => {
-  assertStrictEquals(wire.PROTOCOL_VERSION, 8);
+Deno.test("version negotiation: v7, v8 and v9 are served at their own version, v6 and v10 are refused", () => {
+  assertStrictEquals(wire.PROTOCOL_VERSION, 9);
   assertStrictEquals(wire.MIN_PROTOCOL_VERSION, 7);
+  assertStrictEquals(wire.negotiateVersion(9), 9);
   assertStrictEquals(wire.negotiateVersion(8), 8);
   assertStrictEquals(wire.negotiateVersion(7), 7);
   assertStrictEquals(wire.negotiateVersion(6), null);
   // A newer peer is refused too — the same rule the Rust and Python halves
   // follow; a newer client that speaks down redials at our version.
-  assertStrictEquals(wire.negotiateVersion(9), null);
+  assertStrictEquals(wire.negotiateVersion(10), null);
 });
 
 Deno.test("ErrorTyped(InvalidArgument) golden bytes", () => {
@@ -608,11 +609,11 @@ Deno.test("an unknown FUTURE taxonomy variant degrades to a named base error", (
 // --- failure modes ---
 
 Deno.test("an unknown Call variant names the protocol version", () => {
-  assertThrows(() => wire.decodeCall(b([0x09])), ProtocolError, "v8");
+  assertThrows(() => wire.decodeCall(b([0x09])), ProtocolError, "v9");
 });
 
 Deno.test("an unknown Reply variant names the protocol version", () => {
-  assertThrows(() => wire.decodeReply(b([0x2a])), ProtocolError, "protocol v8");
+  assertThrows(() => wire.decodeReply(b([0x2a])), ProtocolError, "protocol v9");
 });
 
 Deno.test("a truncated payload is a protocol error", () => {
