@@ -67,6 +67,8 @@ Deno.test("ttt app: the vendored htmx, ttt.css and host.css are the book's", asy
       "f93bde4b6dacb82b085d88c8cf33c899eb3dd435dd64acd5e1e19c63be04f09b",
     "host.css":
       "79437443cd22e56d183ebf5b4a6de625e72354d38e8a39e54894bf0dc19f27ac",
+    "conflict.js":
+      "b6612b44e91a4f118919cc45e4ecb4b135503526e77a3af7a7a87f70f5e91e54",
   };
   for (const [file, digest] of Object.entries(expected)) {
     const bytes = await Deno.readFile(new URL(file, STATIC_DIR));
@@ -538,7 +540,10 @@ function standIn(): Host & { writes: string[]; reads: string[] } {
         return Promise.resolve(new Representation("ok"));
       }
       if (name === "move:0:0") {
-        throw new InvalidArgumentError("x, y", "0,0 is taken — X played there");
+        throw new ConflictError("0,0 is taken — X played there");
+      }
+      if (name === "move:3:1") {
+        throw new InvalidArgumentError("x, y", "3,1 is off the board");
       }
       return Promise.resolve(new Representation("O plays 1,0"));
     },
@@ -568,6 +573,7 @@ Deno.test("ttt app: the page composes view:game under a <base> at the game", asy
   assert(body.includes(`<base href="/game/a/">`));
   assert(body.includes(`<section aria-label="Game a"></section>`));
   assert(body.includes(`<li><a href="/game/a/">game a</a></li>`));
+  assert(body.includes(`<script src="/static/conflict.js" defer></script>`));
   assertStrictEquals(headers.get("content-security-policy"), PAGE_CSP);
 });
 
@@ -652,7 +658,7 @@ Deno.test("ttt app: a hostile mark is escaped, and its marker is never expanded"
   assert(!host.reads.includes("template:game"), host.reads.join(" "));
 });
 
-Deno.test("ttt app: a play is a Sink through the host, a refusal is answered", async () => {
+Deno.test("ttt app: a refused move is a 409 `conflict: {msg}`, and the next play restores the status", async () => {
   const host = standIn();
   const played = await call(
     host,
@@ -660,17 +666,57 @@ Deno.test("ttt app: a play is a Sink through the host, a refusal is answered", a
     "/game/a/iki/tutorial/ttt/view/play/1/0",
   );
   assertEquals(played.slice(0, 2), [200, "O plays 1,0. O to play."]);
+  const readsBefore = host.reads.length;
   const refused = await call(
     host,
     "POST",
     "/game/a/iki/tutorial/ttt/view/play/0/0",
   );
+  assertEquals(host.reads.length, readsBefore);
   assertEquals(refused.slice(0, 2), [
-    200,
-    "invalid argument `x, y`: 0,0 is taken — X played there. O to play.",
+    409,
+    "conflict: 0,0 is taken — X played there",
   ]);
+  assertEquals(
+    refused[2].get("content-type"),
+    "text/plain; charset=utf-8",
+  );
+  // The refusal composes no view (the count above): only the text is the body.
+  // Off the board stays a bad argument, answered as the Rust view answers it.
+  const off = await call(
+    host,
+    "POST",
+    "/game/a/iki/tutorial/ttt/view/play/3/1",
+  );
+  assertEquals(off.slice(0, 2), [
+    200,
+    "invalid argument `x, y`: 3,1 is off the board. O to play.",
+  ]);
+  // A successful move after a refusal answers the full reply (status included).
+  const after = await call(
+    host,
+    "POST",
+    "/game/a/iki/tutorial/ttt/view/play/1/0",
+  );
+  assertEquals(after.slice(0, 2), [200, "O plays 1,0. O to play."]);
   await call(host, "POST", "/game/a/iki/tutorial/ttt/view/reset");
-  assertEquals(host.writes, ["move:1:0", "move:0:0", "reset"]);
+  assertEquals(host.writes, [
+    "move:1:0",
+    "move:0:0",
+    "move:3:1",
+    "move:1:0",
+    "reset",
+  ]);
+});
+
+Deno.test("ttt app: the page loads conflict.js, which swaps a 409 into the target as text", async () => {
+  const host = standIn();
+  const [code, js, headers] = await call(host, "GET", "/static/conflict.js");
+  assertEquals(code, 200);
+  assertEquals(headers.get("content-type"), "text/javascript");
+  assert(js.includes("xhr.status === 409"));
+  assert(js.includes("detail.target.textContent = detail.xhr.responseText"));
+  assert(!js.includes("innerHTML"));
 });
 
 Deno.test("ttt app: a Conflict from the host answers 409 in core's Display", async () => {
@@ -995,6 +1041,26 @@ Deno.test({
       assertStrictEquals(ours, expect);
       await same(`after ${x},${y}: ${expect}`);
     };
+    /**
+     * A move the state refuses: the app answers 409 with `conflict: {msg}`;
+     * the Rust view reports the same text as its reply's message.
+     */
+    const refused = async (x: number, y: number, expect: string) => {
+      const response = await fetch(`${appUrl}/game/a/${views}/play/${x}/${y}`, {
+        method: "POST",
+      });
+      const body = await response.text();
+      assertEquals(
+        [response.status, body, response.headers.get("content-type")],
+        [409, expect, "text/plain; charset=utf-8"],
+        `refused ${x},${y}`,
+      );
+      const theirs = (await client.sink(
+        `urn:game:b:iki:tutorial:ttt:view:play:${x}:${y}`,
+      )).text;
+      assert(theirs.startsWith(`${expect}. `), `host reply: ${theirs}`);
+      await same(`after refused ${x},${y}`);
+    };
     const reset = async () => {
       const ours = await get(appUrl, `/game/a/${views}/reset`, "POST");
       const theirs =
@@ -1010,11 +1076,7 @@ Deno.test({
       // A win for X down diagonal 1 (2,0 → 1,1 → 0,2), with refusals on the way.
       await play(1, 1, "X plays 1,1. O to play.");
       await play(0, 0, "O plays 0,0. X to play.");
-      await play(
-        1,
-        1,
-        "invalid argument `x, y`: 1,1 is taken — X played there. X to play.",
-      );
+      await refused(1, 1, "conflict: 1,1 is taken — X played there");
       await play(
         3,
         1,
@@ -1024,11 +1086,7 @@ Deno.test({
       await play(2, 0, "X plays 2,0. O to play.");
       await play(1, 0, "O plays 1,0. X to play.");
       await play(0, 2, "X plays 0,2. X has won.");
-      await play(
-        2,
-        2,
-        "invalid argument `x, y`: the game is over — X has won. X has won.",
-      );
+      await refused(2, 2, "conflict: the game is over — X has won");
       await reset();
       // A draw:  X O X / X O O / O X X
       const draw: [number, number][] = [
@@ -1046,11 +1104,7 @@ Deno.test({
         await play(x, y, `${mark} plays ${x},${y}. ${next} to play.`);
       }
       await play(2, 2, "X plays 2,2. A draw.");
-      await play(
-        1,
-        1,
-        "invalid argument `x, y`: the game is over — a draw. A draw.",
-      );
+      await refused(1, 1, "conflict: the game is over — a draw");
       // The edges, with game a over (so every play is refused and nothing
       // moves): the app answers what the host answers, status and body.
       const answer = async (base: string, method: string, path: string) => {
@@ -1112,6 +1166,7 @@ Deno.test({
           "/game/root/",
           "/static/htmx-2.0.4.min.js",
           "/static/ttt.css",
+          "/static/conflict.js",
           "/static/host.css",
         ]
       ) {
