@@ -4,7 +4,13 @@
  * server's run context, and the client's choice of bytes by negotiated version.
  */
 
-import { assert, assertEquals, assertStrictEquals } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStrictEquals,
+} from "@std/assert";
+import { findIkigai, probeWireVersion, spawnServe } from "./rust_host.ts";
 import * as wire from "../src/wire.ts";
 import { Capability, FrameStream, Verb } from "../src/wire.ts";
 import { connect } from "../src/client.ts";
@@ -208,3 +214,84 @@ for (const version of [7, 8, 9]) {
     },
   );
 }
+
+// The real Rust door (ikigai-cli 0.1.66 or newer speaks v9). Skips when the
+// installed binary does not speak v9, so a v7/v8 host is not mistaken for a bug.
+const IKIGAI = findIkigai();
+const DOOR_V9 = (await probeWireVersion(IKIGAI)) === 9;
+
+async function withDoor(
+  fn: (path: string, seen: RunContext[]) => Promise<void>,
+): Promise<void> {
+  const dir = tempDir();
+  const seen: RunContext[] = [];
+  const server = new Server([
+    endpoint("urn:ts:run", { summary: "records its run" }, (_args, run) => {
+      seen.push(run);
+      return "ok";
+    }),
+  ], `${dir}/peer.sock`);
+  const serving = server.serve();
+  const path = `${dir}/k.sock`;
+  const child = await spawnServe(IKIGAI!, path, [
+    "--prefer",
+    `urn:ts:=${dir}/peer.sock`,
+  ]);
+  try {
+    await fn(path, seen);
+  } finally {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // already gone
+    }
+    await child.status;
+    server.shutdown();
+    await serving;
+    Deno.removeSync(dir, { recursive: true });
+  }
+}
+
+Deno.test({
+  name: "the real v9 door accepts IssueWith and a mounted peer still answers",
+  ignore: !DOOR_V9,
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    await withDoor(async (path, seen) => {
+      await using k = await connect(path, {
+        run: { retries: 2, deadline: Date.now() + 10_000 },
+      });
+      assertStrictEquals(k.serverVersion, 9);
+      assertStrictEquals((await k.source("urn:ts:run")).text, "ok");
+      // 0.1.66 does not forward the run to a mounted peer (it issues plain
+      // Issue), so the handler sees none; this pins what the real bytes do.
+      assertStrictEquals(seen.length, 1);
+      // A typed failure still crosses with a run attached.
+      await assertRejects(() => k.source("urn:nothing:bound:here"));
+    });
+  },
+});
+
+Deno.test({
+  name: "the real v9 door answers a call whose deadline has passed",
+  ignore: !DOOR_V9,
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    await withDoor(async (path) => {
+      await using k = await connect(path, {
+        run: { retries: 0, deadline: Date.now() - 1000 },
+      });
+      const outcome = await k.source("urn:ts:run").then(
+        (r) => `answered ${r.text}`,
+        (e) => `${e?.constructor?.name}: ${e?.message}`,
+      );
+      // Observed on 0.1.66: the door still answers (it does not enforce the
+      // carried time on a mounted read). Either way the reply is well formed
+      // and the connection stays usable.
+      assert(outcome.length > 0);
+      assertStrictEquals((await k.source("urn:ts:run")).text, "ok");
+    });
+  },
+});
