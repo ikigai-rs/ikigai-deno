@@ -2,7 +2,7 @@
  * The ikigai IPC wire protocol: types, postcard codec, framing, the hello,
  * and the typed error taxonomy.
  *
- * Mirrors `ikigai-wire` (Rust) at `PROTOCOL_VERSION` 8. The codec is
+ * Mirrors `ikigai-wire` (Rust) at `PROTOCOL_VERSION` 9. The codec is
  * non-self-describing, so every type here restates a Rust layout
  * field-for-field; the Rust declaration is the normative source
  * (`ikigai-wire/src/lib.rs` and the `ikigai-core` types it serializes), and
@@ -40,6 +40,13 @@
  * up (unequal versions close, under v7's rules), so a v8 client that hears 7
  * redials once, saying 7.
  *
+ * **v9 is backward compatible with v7 and v8 the same way.** It appends
+ * `Call::IssueWith` (variant 5; see {@linkcode IssueWith}) and sends the
+ * failure classes (tags 9-13) to a peer that negotiated 9; an older peer gets
+ * them as `Endpoint(display)`. A client sends `IssueWith` only to a v9 peer,
+ * and only when its run carries a retry budget or a deadline. The deadline
+ * crosses as TIME LEFT in whole ms, never an absolute instant.
+ *
  * @module
  */
 
@@ -53,9 +60,19 @@ import { isAbsoluteIri } from "./iri.ts";
  * `Reply::ErrorTyped` (the error taxonomy crosses, not a flat string) and
  * removes the v6 tolerances: the hello is required on both sides. v8 appends
  * `WireError::Conflict` (variant 8) and is backward compatible with v7 — see
- * {@linkcode MIN_PROTOCOL_VERSION}.
+ * {@linkcode MIN_PROTOCOL_VERSION}. v9 appends `Call::IssueWith` (variant 5:
+ * an optional trace context, retry budget and TIME LEFT in whole ms — never an
+ * absolute instant; a server adds it to its OWN clock) and sends failure tags
+ * 9-13 to peers that negotiated 9.
  */
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
+
+/**
+ * The first wire version that carries `Call::IssueWith` (variant 5) and the
+ * failure classes 9-13. Below it, a call never carries a retry budget or a
+ * deadline and a failure of those classes crosses as `Endpoint(display)`.
+ */
+export const ISSUE_WITH_SINCE_VERSION = 9;
 
 /**
  * The oldest peer version this side still speaks. A hello from here up to
@@ -1126,7 +1143,7 @@ export interface TraceEvent {
 /**
  * `ikigai_wire::Call`: one client → server message, mirroring the Rust
  * `Resolver` methods. `kind` order is the postcard variant order — issue=0,
- * isCached=1, entries=2, issueAs=3, issueTraced=4 — and is append-only.
+ * isCached=1, entries=2, issueAs=3, issueTraced=4, issueWith=5 — and is append-only.
  * `issueAs` resolves under an explicit capability (a server clamps it to the
  * principal the channel authenticated); `issueTraced` also records the
  * resolution and is answered with a `resolvedTraced` {@linkcode Reply}.
@@ -1145,7 +1162,27 @@ export type Call =
     readonly request: Request;
     readonly capability: Capability;
     readonly context: TraceContext;
+  }
+  | {
+    readonly kind: "issueWith";
+    readonly request: Request;
+    readonly capability: Capability;
+    readonly with: IssueWith;
   };
+
+/**
+ * `ikigai_wire::IssueWith` (v9): the optional extras of a call, in wire order.
+ * `timeLeftMs` is the time LEFT, in whole milliseconds, never an absolute
+ * instant: a server adds it to its own now.
+ */
+export interface IssueWith {
+  /** The trace context, when the call is traced. */
+  readonly trace: TraceContext | null;
+  /** The retry budget remaining (a `u32`), when the run carries a pool. */
+  readonly retries: number | null;
+  /** Time left before the run's deadline, whole ms (a `u64`). */
+  readonly timeLeftMs: number | null;
+}
 
 /**
  * The error taxonomy on the wire — a field-for-field mirror of the Rust
@@ -1278,18 +1315,36 @@ export function toWireFailure(error: unknown): WireFailure {
   if (error instanceof ConflictError) {
     return { kind: "conflict", message: error.message };
   }
-  if (
-    error instanceof DepthExceededError || error instanceof RetryAfterError ||
-    error instanceof OverBudgetError || error instanceof RefusedError ||
-    error instanceof UnsupportedError
-  ) {
-    // Tags 9-13 are receive-only here: a v8 peer gets the Display form inside
-    // Endpoint, as a Rust v8 server sends it.
-    return { kind: "endpoint", message: error.display() };
+  if (error instanceof DepthExceededError) {
+    return { kind: "depthExceeded", depth: error.depth, target: error.target };
+  }
+  if (error instanceof RetryAfterError) {
+    return {
+      kind: "retryAfter",
+      delayMs: error.delayMs,
+      detail: error.detail,
+    };
+  }
+  if (error instanceof OverBudgetError) {
+    return { kind: "overBudget", detail: error.message };
+  }
+  if (error instanceof RefusedError) {
+    return { kind: "refused", message: error.message };
+  }
+  if (error instanceof UnsupportedError) {
+    return { kind: "unsupported", verb: error.verb, detail: error.message };
   }
   const message = error instanceof Error ? error.message : String(error);
   return { kind: "endpoint", message };
 }
+
+const NEW_CLASS_FAILURES: ReadonlySet<string> = new Set([
+  "depthExceeded",
+  "retryAfter",
+  "overBudget",
+  "refused",
+  "unsupported",
+]);
 
 /**
  * The reply as a peer that negotiated `peerVersion` may receive it — the
@@ -1311,6 +1366,20 @@ export function toWireFailure(error: unknown): WireFailure {
  * ```
  */
 export function replyForPeer(reply: Reply, peerVersion: number): Reply {
+  if (
+    peerVersion < ISSUE_WITH_SINCE_VERSION && reply.kind === "errorTyped" &&
+    NEW_CLASS_FAILURES.has(reply.failure.kind)
+  ) {
+    // Tags 9-13 are v9: an older peer gets the Display form inside Endpoint,
+    // as a Rust v8 server sends it.
+    return {
+      kind: "errorTyped",
+      failure: {
+        kind: "endpoint",
+        message: typedError(reply.failure).display(),
+      },
+    };
+  }
   if (
     peerVersion < CONFLICT_SINCE_VERSION && reply.kind === "errorTyped" &&
     reply.failure.kind === "conflict"
@@ -1503,12 +1572,48 @@ function putWireFailure(out: Writer, failure: WireFailure): void {
       out.varint(8);
       out.string(failure.message);
       break;
-    default:
-      // Tags 9-13 are receive-only on this side (see WireFailure).
-      throw new ProtocolError(
-        `this peer does not send wire failure \`${failure.kind}\``,
-      );
+    case "depthExceeded":
+      out.varint(9);
+      out.varint(failure.depth);
+      out.string(failure.target);
+      break;
+    case "retryAfter":
+      out.varint(10);
+      out.optionVarint(failure.delayMs);
+      out.string(failure.detail);
+      break;
+    case "overBudget":
+      out.varint(11);
+      out.string(failure.detail);
+      break;
+    case "refused":
+      out.varint(12);
+      out.string(failure.message);
+      break;
+    case "unsupported":
+      out.varint(13);
+      if (failure.verb === null) {
+        out.byte(0);
+      } else {
+        out.byte(1);
+        out.varint(failure.verb);
+      }
+      out.string(failure.detail);
+      break;
   }
+}
+
+/** `IssueWith` as its postcard bytes: trace, retries, time left. */
+function putIssueWith(out: Writer, w: IssueWith): void {
+  if (w.trace === null) {
+    out.byte(0);
+  } else {
+    out.byte(1);
+    out.varint(w.trace.traceId);
+    out.optionVarint(w.trace.parentSpan);
+  }
+  out.optionVarint(w.retries);
+  out.optionVarint(w.timeLeftMs);
 }
 
 function putTraceEvent(out: Writer, event: TraceEvent): void {
@@ -1588,6 +1693,12 @@ export function encodeCall(call: Call): Uint8Array {
       putCapability(out, call.capability);
       out.varint(call.context.traceId);
       out.optionVarint(call.context.parentSpan);
+      break;
+    case "issueWith":
+      out.varint(5);
+      putRequest(out, call.request);
+      putCapability(out, call.capability);
+      putIssueWith(out, call.with);
       break;
   }
   return out.finish();
@@ -1794,6 +1905,49 @@ function getWireFailure(r: Reader): WireFailure {
   }
 }
 
+function getIssueWith(r: Reader): IssueWith {
+  let trace: TraceContext | null = null;
+  if (r.option()) {
+    const traceId = r.varint();
+    trace = { traceId, parentSpan: r.option() ? r.varint() : null };
+  }
+  const retries = r.option() ? r.varint(32) : null;
+  const timeLeftMs = r.option() ? r.varint() : null;
+  return { trace, retries, timeLeftMs };
+}
+
+/**
+ * An {@linkcode IssueWith} alone as its postcard bytes (the shared vectors'
+ * form, without the Call around it).
+ *
+ * ```ts
+ * import { assertEquals } from "@std/assert";
+ * import { encodeIssueWith } from "./wire.ts";
+ * assertEquals(
+ *   encodeIssueWith({ trace: null, retries: 2, timeLeftMs: 1500 }),
+ *   new Uint8Array([0, 1, 2, 1, 0xdc, 0x0b]),
+ * );
+ * ```
+ */
+export function encodeIssueWith(w: IssueWith): Uint8Array {
+  const out = new Writer();
+  putIssueWith(out, w);
+  return out.finish();
+}
+
+/** Decode the bytes {@linkcode encodeIssueWith} writes. */
+export function decodeIssueWith(payload: Uint8Array): IssueWith {
+  try {
+    const r = new Reader(payload);
+    const w = getIssueWith(r);
+    r.finish();
+    return w;
+  } catch (e) {
+    if (e instanceof DecodeError) throw new ProtocolError(e.message);
+    throw e;
+  }
+}
+
 function getTraceEvent(r: Reader): TraceEvent {
   const target = r.string();
   const thread = r.string();
@@ -1866,6 +2020,13 @@ export function decodeCall(payload: Uint8Array): Call {
         request,
         capability,
         context: { traceId, parentSpan },
+      };
+    } else if (variant === 5) {
+      call = {
+        kind: "issueWith",
+        request: getRequest(r),
+        capability: getCapability(r),
+        with: getIssueWith(r),
       };
     } else {
       throw versionMismatch("Call", variant);

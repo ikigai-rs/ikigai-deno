@@ -90,7 +90,7 @@ Deno.test("the header is big-endian, not little", () => {
 });
 
 Deno.test("a version mismatch names both versions", async () => {
-  // A future v9 server: answers the hello with its own version, closes.
+  // A future v10 server: answers the hello with its own version, closes.
   const dir = tempSocketDir();
   const path = `${dir}/hello.sock`;
   const listener = Deno.listen({ transport: "unix", path });
@@ -98,12 +98,12 @@ Deno.test("a version mismatch names both versions", async () => {
     const conn = await listener.accept();
     const stream = new FrameStream(conn);
     await stream.readFrame();
-    await stream.writeFrame(wire.encodeHello(wire.hello(9)));
+    await stream.writeFrame(wire.encodeHello(wire.hello(10)));
     conn.close();
   })();
   const err = await assertRejects(() => connect(path), ProtocolError);
+  assertMatch(err.message, /v10/);
   assertMatch(err.message, /v9/);
-  assertMatch(err.message, /v8/);
   await server;
   listener.close();
   Deno.removeSync(dir, { recursive: true });
@@ -124,7 +124,7 @@ Deno.test("a pre-hello server is diagnosed, not tolerated", async () => {
   })();
   const err = await assertRejects(() => connect(path), ProtocolError);
   assert(err.message.includes("predates wire v6"), err.message);
-  assert(err.message.includes("v8"), err.message);
+  assert(err.message.includes("v9"), err.message);
   await server;
   listener.close();
   Deno.removeSync(dir, { recursive: true });
@@ -252,7 +252,7 @@ Deno.test("v8 server: a v8 peer receives the typed Conflict", async () => {
   const serving = server.serve();
   try {
     await using k = await connect(path);
-    assertStrictEquals(k.serverVersion, 8);
+    assertStrictEquals(k.serverVersion, 9);
     const err = await assertRejects(
       () => k.source("urn:ts:clash"),
       ConflictError,
@@ -266,10 +266,10 @@ Deno.test("v8 server: a v8 peer receives the typed Conflict", async () => {
   }
 });
 
-Deno.test("v8 server: hellos of 6 and 9 are answered 8 and refused", async () => {
+Deno.test("v8 server: hellos of 6 and 10 are answered 9 and refused", async () => {
   // Outside 7..=8 in EITHER direction: our version, so the peer can name
   // both, then a close — the rule the Rust and Python halves share.
-  for (const offered of [6, 9]) {
+  for (const offered of [6, 10]) {
     const dir = tempSocketDir();
     const path = `${dir}/out.sock`;
     const server = conflictServer(path);
@@ -280,7 +280,7 @@ Deno.test("v8 server: hellos of 6 and 9 are answered 8 and refused", async () =>
       await stream.writeFrame(wire.encodeHello(wire.hello(offered)));
       assertEquals(
         wire.decodeHello(await stream.readFrame()),
-        wire.hello(8),
+        wire.hello(9),
         `offered v${offered}`,
       );
       await assertRejects(() => stream.readFrame(), EofError);
@@ -340,7 +340,7 @@ Deno.test("v8 client: a v7 server's answer triggers ONE redial at v7", async () 
   try {
     await using k = await connect(path);
     assertStrictEquals(k.serverVersion, 7);
-    assertEquals(heard, [8, 7], "offered 8, heard 7, redialed saying 7");
+    assertEquals(heard, [9, 7], "offered 9, heard 7, redialed saying 7");
     // A v7 server's conflict is untyped text; the client does NOT sniff it
     // back into a ConflictError.
     const err = await assertRejects(
@@ -376,7 +376,7 @@ Deno.test("v8 client: a v6 server is refused without a redial", async () => {
   try {
     const err = await assertRejects(() => connect(path), ProtocolError);
     assertMatch(err.message, /v6/);
-    assertMatch(err.message, /v8/);
+    assertMatch(err.message, /v9/);
     assertStrictEquals(dials, 1);
   } finally {
     listener.close();

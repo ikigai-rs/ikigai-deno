@@ -579,6 +579,14 @@ record the layout. Highlights a public ABI document should state:
   versions. The v6 one-version tolerances (client fallback without hello;
   serving a legacy first frame) are GONE: a hang-up on the hello is diagnosed
   pre-v6, silence is diagnosed as a hang, a magic-less first frame is refused.
+- **v9 is backward compatible with v7 and v8.** It appends `Call::IssueWith`
+  (variant 5: optional trace context, retry budget, and time left in whole ms)
+  and sends error tags 9-13 only to a v9 peer. The deadline is TIME LEFT, never
+  an absolute instant: a server adds it to its own clock.
+  `connect(path, { run:
+  { retries, deadline } })` sends it to a v9 server;
+  handlers receive it as their second argument (`run.retriesLeft`,
+  `run.timeLeftMs()`).
 - **v8 is backward compatible with v7** (`MIN_PROTOCOL_VERSION = 7`). A server
   answers a hello of 7 or 8 with the PEER's own version (a v7 client refuses any
   answer but 7) and serves the connection at it; any other hello (6, 9) is

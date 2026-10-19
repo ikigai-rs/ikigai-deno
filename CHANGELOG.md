@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased — wire v9: IssueWith and the failure classes on send (ledger #1915, step 2 of #1546)
+
+- **`PROTOCOL_VERSION = 9`** (`MIN_PROTOCOL_VERSION` stays 7). Negotiation is as
+  before: a v7 or v8 peer is spoken to at its own version.
+- **`Call::IssueWith` (variant 5)** decodes and encodes: `trace`, `retries`,
+  `time_left_ms`, each optional (`IssueWith`, `encodeIssueWith`). **The deadline
+  is time left in whole ms, never an absolute instant**: a server adds it to its
+  OWN now.
+- **Server.** A handler's second argument is a `RunContext` (`retriesLeft`,
+  `deadline` on the server's clock, `timeLeftMs()`); a peer that sends none gets
+  `NO_RUN`, today's behavior. `issueWith` with no trace records none.
+- **Client.** `ConnectOptions.run` / `Client.run` (`{ retries, deadline }`): the
+  client sends `IssueWith` only to a peer that negotiated 9 and only when a
+  retry budget or deadline is set; otherwise the exact pre-v9 `Issue`/`IssueAs`/
+  `IssueTraced` bytes.
+- **Failure classes are now sent.** A thrown `RetryAfterError` etc. crosses as
+  tags 9-13 to a v9 peer; `replyForPeer` downgrades them to `Endpoint(display)`
+  for a v7/v8 peer, byte-identical to before. (This replaces the receive-only
+  note below; `toWireFailure` now returns the typed class.)
+- Interop against the real Rust door at ikigai-cli 0.1.66 is pending its
+  publication (0.1.65 is the latest published).
+
 ## Unreleased — a refused move is a 409 (ledger #1911, from #585 step 5)
 
 Changed:
