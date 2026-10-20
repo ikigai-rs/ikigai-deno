@@ -24,7 +24,8 @@ const IKIGAI = findIkigai();
 const RUST_WIRE_VERSION = await probeWireVersion(IKIGAI);
 
 Deno.test({
-  name: "an example app through the kernel gains MISS -> HIT caching",
+  name:
+    "an example app through the kernel never serves a mounted read from the host's cache",
   ignore: IKIGAI === null || !speaksWireVersion(RUST_WIRE_VERSION),
   // The Rust CLI child and the in-process server cross test boundaries in
   // ways the strict sanitizers dislike; cleanup is explicit instead.
@@ -44,11 +45,19 @@ Deno.test({
         try {
           const first = await app.request("/upper?text=roc");
           assertStrictEquals(await first.text(), "ROC");
-          assertStrictEquals(first.headers.get("x-ikigai-cache"), "MISS");
           const second = await app.request("/upper?text=roc");
           assertStrictEquals(await second.text(), "ROC");
-          // The kernel cached the peer's pure result.
-          assertStrictEquals(second.headers.get("x-ikigai-cache"), "HIT");
+          // ikigai-cli 0.1.66 holds a mounted read as Expiry::Always whatever
+          // the peer said (the peer may cut before the host would know), so
+          // the host never answers HIT for it: every read is a round trip.
+          assertStrictEquals(
+            second.headers.get("x-ikigai-cache"),
+            "UNCACHEABLE",
+          );
+          assertStrictEquals(
+            first.headers.get("x-ikigai-cache"),
+            "UNCACHEABLE",
+          );
           // /catalog now lists the kernel's whole space with the mount's
           // entries composed in (cli #272: a prefer mount's entries appear
           // without prior use).

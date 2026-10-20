@@ -159,7 +159,7 @@ Deno.test("ttt: the family is listed by its template, as ttt-stored", async () =
 });
 
 Deno.test({
-  name: "ttt: through a real Rust host, a Sink cuts the host's cached read",
+  name: "ttt: through a real Rust host, a Sink is seen by the host's next read",
   ignore: IKIGAI === null || !speaksWireVersion(RUST_WIRE_VERSION),
   sanitizeResources: false,
   sanitizeOps: false,
@@ -183,20 +183,19 @@ Deno.test({
         await k.sink(cell, "X");
         const first = await k.source(cell);
         assertStrictEquals(first.text, "X");
-        assertStrictEquals(first.cacheStatus, CacheStatus.Miss);
+        assertStrictEquals(first.cacheStatus, CacheStatus.Uncacheable);
+        // ikigai-cli 0.1.66 holds a mounted read as Expiry::Always, so the
+        // host never serves it from its own cache: each read is a round trip
+        // to the store (the cache the Sink cuts is the PEER's own).
         const reads = store.reads;
         const second = await k.source(cell);
         assertStrictEquals(second.text, "X");
-        assertStrictEquals(second.cacheStatus, CacheStatus.Hit);
-        assertStrictEquals(store.reads, reads, "the host served it cached");
-        // The write goes through the host, which cuts the read's thread.
+        assertStrictEquals(store.reads, reads + 1, "the host did not cache it");
+        // A write through the host is seen by the very next read.
         await k.sink(cell, "O");
         const third = await k.source(cell);
         assertStrictEquals(third.text, "O");
-        assertStrictEquals(third.cacheStatus, CacheStatus.Miss);
-        assertStrictEquals(store.reads, reads + 1, "recomputed after the cut");
-        // …and a Delete cuts it too.
-        await k.source(cell); // cached again
+        // …and a Delete too.
         await k.delete(cell);
         await assertRejects(() => k.source(cell), NotFoundError);
         // The host's catalog lists the family by its template.

@@ -218,16 +218,18 @@ integration("a --prefer mount resolves the Deno peer verbatim", async () => {
   });
 });
 
-integration("the Rust host caches a cacheable Deno result", async () => {
-  // Expiry::Never crosses the wire; the HOST kernel caches the peer's
-  // result.
+integration("the Rust host does not cache a mounted Deno result", async () => {
+  // Expiry::Never crosses the wire, but the host rewrites it to Always.
   await withDenoPeer(async (path) => {
     const out = await runRepl(
       ["source urn:ts:shout in=abc", "source urn:ts:shout in=abc"],
       { target: `urn:ts:=${path}` },
     );
     assert(out.includes("ABC!"), out);
-    assert(out.includes("1 cached · 1 computed"), out);
+    // ikigai-cli 0.1.66 holds a mounted read as Expiry::Always whatever the
+    // peer said, so the host caches nothing here.
+    assert(!out.includes("cached"), out);
+    assert(out.includes("2 uncacheable"), out);
   });
 });
 
