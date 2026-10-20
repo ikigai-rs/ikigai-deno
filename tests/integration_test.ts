@@ -226,7 +226,7 @@ integration("the Rust host does not cache a mounted Deno result", async () => {
       { target: `urn:ts:=${path}` },
     );
     assert(out.includes("ABC!"), out);
-    // ikigai-cli 0.1.66 holds a mounted read as Expiry::Always whatever the
+    // ikigai-cli 0.1.64 holds a mounted read as Expiry::Always whatever the
     // peer said, so the host caches nothing here.
     assert(!out.includes("cached"), out);
     assert(out.includes("2 uncacheable"), out);

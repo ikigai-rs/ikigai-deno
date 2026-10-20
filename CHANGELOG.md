@@ -12,7 +12,8 @@
   serve`; the face's bytes needed no change. Observed, not a face bug:
   0.1.66 does not forward the run to a mounted peer, nor enforce a spent
   deadline.
-- **The door changed, tests followed**: 0.1.66 holds every mounted read as
+- **The door changed, tests followed**: 0.1.64 (the first release with the rule;
+  the interop job pins 0.1.66) holds every mounted read as
   `Expiry::Always` (`as_held_here`), so the host never answers HIT for a Deno
   peer; the three tests asserting host-side caching now assert the new rule. The
   face's `cacheable: true` bytes (`Expiry::Never`) were correct throughout.
