@@ -184,7 +184,7 @@ Deno.test({
         const first = await k.source(cell);
         assertStrictEquals(first.text, "X");
         assertStrictEquals(first.cacheStatus, CacheStatus.Uncacheable);
-        // ikigai-cli 0.1.66 holds a mounted read as Expiry::Always, so the
+        // ikigai-cli 0.1.64 holds a mounted read as Expiry::Always, so the
         // host never serves it from its own cache: each read is a round trip
         // to the store (the cache the Sink cuts is the PEER's own).
         const reads = store.reads;

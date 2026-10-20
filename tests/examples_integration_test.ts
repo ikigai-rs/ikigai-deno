@@ -47,7 +47,7 @@ Deno.test({
           assertStrictEquals(await first.text(), "ROC");
           const second = await app.request("/upper?text=roc");
           assertStrictEquals(await second.text(), "ROC");
-          // ikigai-cli 0.1.66 holds a mounted read as Expiry::Always whatever
+          // ikigai-cli 0.1.64 holds a mounted read as Expiry::Always whatever
           // the peer said (the peer may cut before the host would know), so
           // the host never answers HIT for it: every read is a round trip.
           assertStrictEquals(
