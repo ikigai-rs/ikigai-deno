@@ -43,3 +43,32 @@ jobs:
         # Integration tests that need the `ikigai` binary skip themselves
         # when it is absent (CI has no Rust host; they run locally).
         run: deno task test
+
+  # The real Rust door. The `test` job skips every host-backed test (no binary);
+  # this one builds the pinned ikigai-cli, cached by its version, puts it on PATH
+  # and runs the same suite so the integration and IssueWith tests actually run.
+  # Move IKIGAI_CLI_VERSION to follow the door.
+  interop:
+    runs-on: ubuntu-latest
+    env:
+      IKIGAI_CLI_VERSION: "0.1.66"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache ikigai-cli
+        id: cli-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/ikigai-cli
+          key: ikigai-cli-${{ env.IKIGAI_CLI_VERSION }}
+      - name: Build ikigai-cli
+        if: steps.cli-cache.outputs.cache-hit != 'true'
+        run: cargo install ikigai-cli --version "$IKIGAI_CLI_VERSION" --locked --root ~/ikigai-cli
+      - name: Interop tests
+        run: |
+          export PATH="$HOME/ikigai-cli/bin:$PATH"
+          ikigai --version
+          deno task test
