@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased — interop against the real door at ikigai-cli 0.1.66 (ledger #1925)
+
+- **CI `interop` job** (NOT in this PR: the worker token lacks the `workflow`
+  scope; the patch is in the PR description): builds `ikigai-cli` 0.1.66 (cached
+  by version, `IKIGAI_CLI_VERSION`) and runs the whole suite with it on `PATH`,
+  so the host-backed tests run instead of skipping. The old `test` job still
+  skips them.
+- **Real-door IssueWith tests**: a v9 client with a run is answered by
+  `ikigai
+  serve`; the face's bytes needed no change. Observed, not a face bug:
+  0.1.66 does not forward the run to a mounted peer, nor enforce a spent
+  deadline.
+- **The door changed, tests followed**: 0.1.66 holds every mounted read as
+  `Expiry::Always` (`as_held_here`), so the host never answers HIT for a Deno
+  peer; the three tests asserting host-side caching now assert the new rule. The
+  face's `cacheable: true` bytes (`Expiry::Never`) were correct throughout.
+- The HTTP statuses the Rust edge returns (504, 429 + Retry-After, 422, 502,
+  405/501) are not asserted anywhere in this repo; the statuses tested here are
+  this face's own mapping.
+
 ## Unreleased — wire v9: IssueWith and the failure classes on send (ledger #1915, step 2 of #1546)
 
 - **`PROTOCOL_VERSION = 9`** (`MIN_PROTOCOL_VERSION` stays 7). Negotiation is as
