@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — interop follows ikigai-cli 0.1.67: a run reaches a `--prefer` peer (ledger #1991)
+
+- **CI `interop` job** pins `IKIGAI_CLI_VERSION` 0.1.67.
+- **The door changed, tests followed** (ikigai-cli 0.1.67, ledger #1942): a
+  `--prefer` mount now forwards a v9 client's run deadline to the peer as time
+  left; the retry budget still stops at the door, by design. The two real-door
+  run tests now pin that: the peer's `RunContext` has `retriesLeft` null and a
+  deadline within the 10 s sent (a tolerance, never an exact value), and a spent
+  deadline arrives as zero time left and is still answered. The face's bytes
+  needed no change.
+
 ## Unreleased — interop against the real door at ikigai-cli 0.1.66 (ledger #1925)
 
 - **CI `interop` job** (NOT in this PR: the worker token lacks the `workflow`

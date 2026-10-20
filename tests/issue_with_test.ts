@@ -215,8 +215,10 @@ for (const version of [7, 8, 9]) {
   );
 }
 
-// The real Rust door (ikigai-cli 0.1.66 or newer speaks v9). Skips when the
-// installed binary does not speak v9, so a v7/v8 host is not mistaken for a bug.
+// The real Rust door (ikigai-cli 0.1.66 or newer speaks v9; the run tests below
+// pin 0.1.67, which forwards a run's deadline to a `--prefer` peer, ledger
+// #1942). Skips when the installed binary does not speak v9, so a v7/v8 host is
+// not mistaken for a bug.
 const IKIGAI = findIkigai();
 const DOOR_V9 = (await probeWireVersion(IKIGAI)) === 9;
 
@@ -264,9 +266,15 @@ Deno.test({
       });
       assertStrictEquals(k.serverVersion, 9);
       assertStrictEquals((await k.source("urn:ts:run")).text, "ok");
-      // 0.1.66 does not forward the run to a mounted peer (it issues plain
-      // Issue), so the handler sees none; this pins what the real bytes do.
+      // Since 0.1.67 (ledger #1942) a `--prefer` mount forwards the client's
+      // deadline to the peer as time left; the retry budget stops at the door,
+      // by design. So the handler sees a deadline of at most the 10 s sent,
+      // less the trip, and no retries. 0.1.66 forwarded neither.
       assertStrictEquals(seen.length, 1);
+      assertStrictEquals(seen[0].retriesLeft, null);
+      assert(seen[0].deadline !== null, "the peer sees the forwarded deadline");
+      const left = seen[0].timeLeftMs()!;
+      assert(left > 5_000 && left <= 10_000, `time left ${left} ms`);
       // A typed failure still crosses with a run attached.
       await assertRejects(() => k.source("urn:nothing:bound:here"));
     });
@@ -279,7 +287,7 @@ Deno.test({
   sanitizeResources: false,
   sanitizeOps: false,
   fn: async () => {
-    await withDoor(async (path) => {
+    await withDoor(async (path, seen) => {
       await using k = await connect(path, {
         run: { retries: 0, deadline: Date.now() - 1000 },
       });
@@ -287,10 +295,16 @@ Deno.test({
         (r) => `answered ${r.text}`,
         (e) => `${e?.constructor?.name}: ${e?.message}`,
       );
-      // Observed on 0.1.66: the door still answers (it does not enforce the
-      // carried time on a mounted read). Either way the reply is well formed
-      // and the connection stays usable.
-      assert(outcome.length > 0);
+      // Observed on 0.1.67 (ledger #1942): the door does not enforce the
+      // carried time on a mounted read; it forwards it, spent, as zero time
+      // left, and the peer (which does not refuse on a spent deadline either)
+      // answers. The retry budget stops at the door. The connection stays
+      // usable.
+      assertStrictEquals(outcome, "answered ok");
+      assertStrictEquals(seen.length, 1);
+      assertStrictEquals(seen[0].retriesLeft, null);
+      assert(seen[0].deadline !== null, "the peer sees the spent deadline");
+      assertStrictEquals(seen[0].timeLeftMs(), 0);
       assertStrictEquals((await k.source("urn:ts:run")).text, "ok");
     });
   },
