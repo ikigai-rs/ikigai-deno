@@ -1,0 +1,54 @@
+[
+  {
+    "action": {
+      "existence_sensitive": true,
+      "requires": [
+        "urn:cap:x"
+      ],
+      "verb": "Source"
+    },
+    "contract": "urn:ikigai:contract:state:source:b3:902cde0bf4284a7fcad530a43015d8290728dcb8add048e126289c72a3808353",
+    "id": "state",
+    "name": "sensitive"
+  },
+  {
+    "action": {
+      "existence_sensitive": true,
+      "failures": [
+        "transient"
+      ],
+      "requires": [
+        "urn:cap:x"
+      ],
+      "verb": "Source"
+    },
+    "contract": "urn:ikigai:contract:state:source:b3:9e5f027b900d7f6c5c252f598a7bba8e62ab14fbdd401f6ead43cd7a6671178a",
+    "id": "state",
+    "name": "sensitive-with-failures"
+  },
+  {
+    "action": {
+      "requires": [
+        "urn:cap:x"
+      ],
+      "verb": "Source"
+    },
+    "contract": "urn:ikigai:contract:state:source:b3:70e014a9ab5e7f242d966b363e77f1d95fb5b07143bea61c883ea53432c707d0",
+    "id": "state",
+    "name": "open"
+  },
+  {
+    "action": {
+      "failures": [
+        "transient"
+      ],
+      "requires": [
+        "urn:cap:x"
+      ],
+      "verb": "Source"
+    },
+    "contract": "urn:ikigai:contract:state:source:b3:765621ba5ecd6ff264d87ed8b4de39ee933e98379bfc11e4c643e2782c77704a",
+    "id": "state",
+    "name": "open-with-failures"
+  }
+]

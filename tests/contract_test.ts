@@ -96,6 +96,7 @@ function actionSpecs(d: DescriptionModel): ActionSpecModel[] {
       arguments: d.arguments,
       outputFrom: d.outputFrom,
       failures: d.failures,
+      existenceSensitive: d.existenceSensitive,
     }
   );
 }

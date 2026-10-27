@@ -1,6 +1,6 @@
 {
   "name": "@ikigai/wire",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT OR Apache-2.0",
   "exports": {
     ".": "./src/mod.ts",
@@ -26,6 +26,7 @@
   "fmt": {
     "exclude": [
       "tests/contract_vectors.json",
+      "tests/existence_contract_vectors.json",
       "tests/failure_class_vectors.json",
       "tests/validation_vectors.json",
       "tests/capability_vectors.json",

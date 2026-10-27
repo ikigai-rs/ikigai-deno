@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1 — existence-sensitive contract hashes (ledger #2431)
+
+- Read `existenceSensitive` on action and description models, emitting
+  `existence_sensitive` in JSON only when true. Flat contracts inherit the flag;
+  explicit actions replace it. Turtle uses `ik:existenceSensitive true`.
+- Match core 0.2.2: sensitive contracts use v2 and append byte `2` after failure
+  classes. Unflagged contracts retain their IRIs. Supplemental references from
+  published core 0.2.2 cover both tails and preserve the shared vector file.
+
 ## Unreleased — interop follows ikigai-cli 0.1.67: a run reaches a `--prefer` peer (ledger #1991)
 
 - **CI `interop` job** pins `IKIGAI_CLI_VERSION` 0.1.67.

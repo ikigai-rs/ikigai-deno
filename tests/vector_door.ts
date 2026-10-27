@@ -58,10 +58,11 @@ function constructs(
   json: Json,
 ): Pick<
   ActionSpecModel,
-  "groups" | "arguments" | "outputFrom" | "failures"
+  "groups" | "arguments" | "outputFrom" | "failures" | "existenceSensitive"
 > {
   const out: {
     failures?: FailureClass[];
+    existenceSensitive?: boolean;
     groups?: InputGroup[];
     arguments?: ArgumentSet;
     outputFrom?: OutputFrom;
@@ -70,6 +71,9 @@ function constructs(
   if ("arguments" in json) out.arguments = json["arguments"] as ArgumentSet;
   if ("output_from" in json) out.outputFrom = json["output_from"] as OutputFrom;
   if ("failures" in json) out.failures = json["failures"] as FailureClass[];
+  if ("existence_sensitive" in json) {
+    out.existenceSensitive = json["existence_sensitive"] as boolean;
+  }
   return out;
 }
 
