@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.1 — existence-sensitive contracts (core 0.2.2, ledger #2431)
+
+- Read existence sensitivity on description and action models, select the v2
+  contract form when true, and append core’s byte `2` after failure classes.
+  False and absent flags preserve existing contract IRIs.
+- Emit `existence_sensitive` in JSON and `ik:existenceSensitive` in Turtle only
+  when true. Explicit per-verb actions replace the flat flag.
+- Refresh the shared contract vectors verbatim from core commit
+  `c2933c7b490a372cd347872af40cdf03d702326a`, including six sensitive contracts
+  and four doors.
+
 ## Unreleased — interop follows ikigai-cli 0.1.67: a run reaches a `--prefer` peer (ledger #1991)
 
 - **CI `interop` job** pins `IKIGAI_CLI_VERSION` 0.1.67.
