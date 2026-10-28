@@ -96,6 +96,7 @@ function actionSpecs(d: DescriptionModel): ActionSpecModel[] {
       arguments: d.arguments,
       outputFrom: d.outputFrom,
       failures: d.failures,
+      existenceSensitive: d.existenceSensitive,
     }
   );
 }
@@ -386,4 +387,24 @@ Deno.test("escapeIriFragment is core's: the IRIREF set only, `%` left alone", ()
       requires: [],
     }).startsWith("urn:ikigai:contract:a%253Eb:delete:b3:"),
   );
+});
+
+Deno.test("false existence sensitivity is omitted from JSON and Turtle", () => {
+  const vector = VECTORS.doors.find((d) =>
+    d.name === "core/existence-sensitive-replaced"
+  )!;
+  const explicitFalse = {
+    ...vector.description,
+    existence_sensitive: false,
+    actions: (vector.description["actions"] as Json[]).map((a) => ({
+      ...a,
+      existence_sensitive: false,
+    })),
+  };
+  const absent = { ...vector.description };
+  delete absent["existence_sensitive"];
+  const door = new VectorDoor(explicitFalse);
+  const unflagged = new VectorDoor(absent);
+  assertEquals(door.descriptionJson(), unflagged.descriptionJson());
+  assertStrictEquals(door.descriptionTurtle(), unflagged.descriptionTurtle());
 });

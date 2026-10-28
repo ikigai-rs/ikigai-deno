@@ -338,7 +338,7 @@ function canonicalInput(input: ArgSpec): CanonicalInput {
  * **Two forms, chosen by content** (ledger #1547). A contract that uses a
  * construct v1 cannot carry (an input's `needs`, `list`, value notes,
  * examples or empty enumeration, a group, an open or envelope argument set,
- * `output_from`, stated failure classes) is digested under `ikigai:contract:v2` instead (core's
+ * `output_from`, stated failure classes, existence sensitivity) is digested under `ikigai:contract:v2` instead (core's
  * `contract_id_v2`; the byte layout is in core's `tests/vectors/README.md`);
  * every other contract keeps its v1 digest, so no existing IRI moves.
  */
@@ -368,7 +368,8 @@ export function contractId(endpointId: string, spec: ActionSpecModel): string {
 
 /** Whether a contract uses a construct only the v2 form carries (core's `uses_v2`). */
 function usesV2(spec: ActionSpecModel): boolean {
-  return spec.failures !== undefined || (spec.groups?.length ?? 0) > 0 ||
+  return spec.existenceSensitive === true || spec.failures !== undefined ||
+    (spec.groups?.length ?? 0) > 0 ||
     spec.arguments !== undefined ||
     spec.outputFrom !== undefined ||
     spec.inputs.some((i) =>
@@ -440,7 +441,7 @@ function contractIdV2(endpointId: string, spec: ActionSpecModel): string {
     h.u8(1);
     h.str(from.input);
   }
-  // Stated failure classes go LAST and only when stated (ledger #1546), so a
+  // Stated failure classes are appended only when stated (ledger #1546), so a
   // contract that states none keeps the digest it had.
   if (spec.failures !== undefined) {
     h.u8(1);
@@ -450,6 +451,8 @@ function contractIdV2(endpointId: string, spec: ActionSpecModel): string {
       return c;
     }));
   }
+  // Core 0.2.2: byte 2 follows the failure classes, only when sensitive.
+  if (spec.existenceSensitive) h.u8(2);
   return `b3:${h.digestHex()}`;
 }
 

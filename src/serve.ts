@@ -432,6 +432,8 @@ export interface ActionSpecModel {
    * classes", which is stated and so moves the contract's digest.
    */
   readonly failures?: readonly FailureClass[];
+  /** Whether this contract protects resource existence; false when absent (core 0.2.2). */
+  readonly existenceSensitive?: boolean;
 }
 
 /** `ikigai_core::Description`, the fields this peer emits. */
@@ -463,6 +465,8 @@ export interface DescriptionModel {
   readonly outputFrom?: OutputFrom;
   /** The failure classes the flat form states; see {@linkcode ActionSpecModel.failures}. */
   readonly failures?: readonly FailureClass[];
+  /** Whether this contract protects resource existence; false when absent (core 0.2.2). */
+  readonly existenceSensitive?: boolean;
 }
 
 /**
@@ -481,6 +485,7 @@ function actionSpecs(d: DescriptionModel): ActionSpecModel[] {
       arguments: d.arguments,
       outputFrom: d.outputFrom,
       failures: d.failures,
+      existenceSensitive: d.existenceSensitive,
     }
   );
 }
@@ -554,9 +559,13 @@ function failureClassTerm(failure: FailureClass): string {
 
 /** The groups, argument set and `output_from` a contract carries, as serde writes them. */
 function constructsJson(
-  c: Pick<ActionSpecModel, "groups" | "arguments" | "outputFrom" | "failures">,
+  c: Pick<
+    ActionSpecModel,
+    "groups" | "arguments" | "outputFrom" | "failures" | "existenceSensitive"
+  >,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
+  if (c.existenceSensitive) out["existence_sensitive"] = true;
   if (c.failures !== undefined) out["failures"] = [...c.failures];
   if (c.groups !== undefined && c.groups.length > 0) {
     out["groups"] = c.groups.map((g) => {
@@ -754,6 +763,7 @@ function descriptionTurtle(d: DescriptionModel): string {
   if (d.requires.length > 0) {
     preds.push(`ik:requires ${d.requires.map(capTerm).join(", ")}`);
   }
+  if (d.existenceSensitive) preds.push("ik:existenceSensitive true");
   if (d.failures !== undefined && d.failures.length > 0) {
     preds.push(`ik:mayFail ${d.failures.map(failureClassTerm).join(", ")}`);
   }
@@ -783,6 +793,9 @@ function descriptionTurtle(d: DescriptionModel): string {
     }
     for (const failure of action.failures ?? []) {
       actionPreds.push(`ik:mayFail ${failureClassTerm(failure)}`);
+    }
+    if (action.existenceSensitive) {
+      actionPreds.push("ik:existenceSensitive true");
     }
     for (const arg of action.inputs) {
       const nodeIri = `${actionIri}:input:${nameFragment(arg.name)}`;
