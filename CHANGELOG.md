@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — fixed inputs of a named request (core 0.2.7, ledger #2557)
+
+- Read `fixed` on an input (`ArgSpecInput.fixed`, `ArgSpec.fixed`; core's
+  `ArgSpec::fixed`, ledger #2512). A fixed input is never required, as core's
+  `fixed_to`. Emit `fixed` in JSON and `ik:fixed` on the input node in Turtle
+  only when set.
+- A fixed input selects the v2 contract form, and the digest gains core's tail:
+  the byte `4` and the set of `name` NUL `value` strings, only when an input is
+  fixed. A contract that fixes nothing keeps its IRI.
+- Pinned by `tests/fixed_test.ts` against `tests/fixed_vectors.json`, computed
+  by ikigai-core and ikigai-vocab 0.2.7.
+
 ## 0.1.1 — existence-sensitive contracts (core 0.2.2, ledger #2431)
 
 - Read existence sensitivity on description and action models, select the v2

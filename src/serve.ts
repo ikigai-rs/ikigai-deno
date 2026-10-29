@@ -147,6 +147,13 @@ export interface ArgSpecInput {
   list?: ListSeparator;
   /** What particular `oneOf` values mean, keyed by value. */
   values?: Record<string, ValueNoteInput>;
+  /**
+   * The value a NAMED REQUEST fixes this input to (core's `ArgSpec::fixed`,
+   * ledger #2512), spelled as the binding wrote it: a literal as it is, a
+   * reference as `<iri>`, a capture as `{var}`. A caller may not give a fixed
+   * input, so it is never required (as core's `fixed_to`).
+   */
+  fixed?: string;
 }
 
 /** How a list-valued argument's items are separated in its one value. */
@@ -237,6 +244,8 @@ export class ArgSpec {
   readonly list: ListSeparator | null;
   /** What particular `oneOf` values mean, in value (UTF-8 byte) order. */
   readonly values: ReadonlyMap<string, ValueNote>;
+  /** The value a named request fixes it to, or `null` when it is not fixed. */
+  readonly fixed: string | null;
 
   /**
    * From a bare name (a required `argument` with no summary), a spec object,
@@ -257,6 +266,7 @@ export class ArgSpec {
       this.needs = spec.needs;
       this.list = spec.list;
       this.values = spec.values;
+      this.fixed = spec.fixed;
       return;
     }
     const input: ArgSpecInput = typeof spec === "string"
@@ -264,8 +274,9 @@ export class ArgSpec {
       : spec;
     this.name = input.name;
     this.summary = input.summary ?? "";
-    // A declared default implies the argument is optional (as in Rust).
-    this.required = input.default === undefined
+    // A declared default implies the argument is optional (as in Rust), and
+    // so does a fixed value (core's `fixed_to`).
+    this.required = input.default === undefined && input.fixed === undefined
       ? (input.required ?? true)
       : false;
     this.cls = input.class ?? null;
@@ -276,6 +287,7 @@ export class ArgSpec {
     this.examples = [...(input.examples ?? [])];
     this.needs = [...(input.needs ?? [])];
     this.list = input.list ?? null;
+    this.fixed = input.fixed ?? null;
     const notes = input.values ?? {};
     this.values = new Map(
       wire.sortedUtf8(Object.keys(notes)).map((value) => [value, {
@@ -314,6 +326,7 @@ export class ArgSpec {
       }
       out["values"] = values;
     }
+    if (this.fixed !== null) out["fixed"] = this.fixed;
     return out;
   }
 }
@@ -686,6 +699,8 @@ function descriptionTurtle(d: DescriptionModel): string {
     for (const needed of arg.needs) {
       node += ` ;\n    ik:needs <${owner}:input:${nameFragment(needed)}>`;
     }
+    // Only on a named request's contract (ledger #2512), as core writes it.
+    if (arg.fixed !== null) node += ` ;\n    ik:fixed ${lit(arg.fixed)}`;
     for (const value of arg.values.keys()) {
       node += ` ;\n    ik:valueNote <${valueNodeIri(owner, arg.name, value)}>`;
     }
