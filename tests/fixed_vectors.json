@@ -1,0 +1,201 @@
+{
+  "about": "Computed by ikigai-core 0.2.7 and ikigai-vocab 0.2.7 (ActionSpec::contract_iri, ikigai_vocab::to_turtle; ledger #2512, #2557) for contracts with inputs a named request fixes (ArgSpec::fixed_to). Core's shared contract_vectors.json carries no such case yet; when it does, these move there. fixed/none is fixed/one without the fix: it fixes nothing, so it keeps the v1 form.",
+  "contracts": [
+    {
+      "action": {
+        "inputs": [
+          {
+            "fixed": "urn:example:graph",
+            "name": "graph",
+            "required": false,
+            "source": "argument",
+            "summary": ""
+          }
+        ],
+        "outputs": [
+          "text/turtle"
+        ],
+        "verb": "Source"
+      },
+      "contract": "urn:ikigai:contract:count:source:b3:3bdce29d8b720397ea092c07517d62bba16554361c5ae3b97a6d8029d8858e2e",
+      "id": "count",
+      "name": "fixed/one"
+    },
+    {
+      "action": {
+        "inputs": [
+          {
+            "name": "graph",
+            "required": false,
+            "source": "argument",
+            "summary": ""
+          }
+        ],
+        "outputs": [
+          "text/turtle"
+        ],
+        "verb": "Source"
+      },
+      "contract": "urn:ikigai:contract:count:source:b3:a1254ff8755395139fe14ca07c8477f8659fe424eeff48de586b37c4d366160b",
+      "id": "count",
+      "name": "fixed/none"
+    },
+    {
+      "action": {
+        "inputs": [
+          {
+            "fixed": "<urn:example:count.rq>",
+            "name": "query",
+            "required": false,
+            "source": "argument",
+            "summary": ""
+          },
+          {
+            "fixed": "urn:example:graph",
+            "name": "graph",
+            "required": false,
+            "source": "argument",
+            "summary": ""
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "source": "argument",
+            "summary": ""
+          }
+        ],
+        "outputs": [
+          "text/turtle"
+        ],
+        "verb": "Source"
+      },
+      "contract": "urn:ikigai:contract:count:source:b3:88037058ba1529c8177236b98c2474c49486352bb57a1a1749edef1d5a8a77ea",
+      "id": "count",
+      "name": "fixed/two"
+    },
+    {
+      "action": {
+        "inputs": [
+          {
+            "name": "limit",
+            "required": false,
+            "source": "argument",
+            "summary": ""
+          },
+          {
+            "fixed": "urn:example:graph",
+            "name": "graph",
+            "required": false,
+            "source": "argument",
+            "summary": ""
+          },
+          {
+            "fixed": "<urn:example:count.rq>",
+            "name": "query",
+            "required": false,
+            "source": "argument",
+            "summary": ""
+          }
+        ],
+        "outputs": [
+          "text/turtle"
+        ],
+        "verb": "Source"
+      },
+      "contract": "urn:ikigai:contract:count:source:b3:88037058ba1529c8177236b98c2474c49486352bb57a1a1749edef1d5a8a77ea",
+      "id": "count",
+      "name": "fixed/two-in-another-order"
+    },
+    {
+      "action": {
+        "inputs": [
+          {
+            "fixed": "urn:example:graph",
+            "name": "query",
+            "required": false,
+            "source": "argument",
+            "summary": ""
+          },
+          {
+            "fixed": "<urn:example:count.rq>",
+            "name": "graph",
+            "required": false,
+            "source": "argument",
+            "summary": ""
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "source": "argument",
+            "summary": ""
+          }
+        ],
+        "outputs": [
+          "text/turtle"
+        ],
+        "verb": "Source"
+      },
+      "contract": "urn:ikigai:contract:count:source:b3:4be9e3c48044c8bbfbd5ff6dfa341786e0e5886d950756c6f40ad0d753f38b71",
+      "id": "count",
+      "name": "fixed/two-values-swapped"
+    },
+    {
+      "action": {
+        "inputs": [
+          {
+            "fixed": "naïve {v}",
+            "name": "𝄞x",
+            "required": false,
+            "source": "argument",
+            "summary": ""
+          },
+          {
+            "fixed": "𝄞",
+            "name": "｡x",
+            "required": false,
+            "source": "argument",
+            "summary": ""
+          }
+        ],
+        "verb": "Source"
+      },
+      "contract": "urn:ikigai:contract:ev%3Eil:source:b3:dfdd637214e7758c42880b6329a21111524dfb8e53da09814f58e4564c0e8b2e",
+      "id": "ev>il",
+      "name": "fixed/non-bmp"
+    }
+  ],
+  "door": {
+    "description": {
+      "id": "count",
+      "inputs": [
+        {
+          "fixed": "urn:example:graph",
+          "name": "graph",
+          "required": false,
+          "source": "argument",
+          "summary": ""
+        },
+        {
+          "fixed": "<urn:example:count.rq>",
+          "name": "query",
+          "required": false,
+          "source": "argument",
+          "summary": ""
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "source": "argument",
+          "summary": ""
+        }
+      ],
+      "outputs": [],
+      "summary": "",
+      "title": "",
+      "verbs": [
+        "Source"
+      ]
+    },
+    "turtle": "@prefix ik: <https://ikigai-rs.dev/ns#> .\n\n<urn:ikigai:endpoint:count> a ik:Endpoint ;\n    ik:id \"count\" ;\n    ik:verb \"Source\" ;\n    ik:input <urn:ikigai:endpoint:count:input:graph> ;\n    ik:input <urn:ikigai:endpoint:count:input:query> ;\n    ik:input <urn:ikigai:endpoint:count:input:limit> ;\n    ik:action <urn:ikigai:contract:count:source:b3:ff39cc71af99813799c46ff56624e08ca59448b1f5386fc8a783028e2138972d> .\n\n<urn:ikigai:endpoint:count:input:graph> ik:inputName \"graph\" ;\n    ik:source \"argument\" ;\n    ik:required false ;\n    ik:fixed \"urn:example:graph\" .\n\n<urn:ikigai:endpoint:count:input:query> ik:inputName \"query\" ;\n    ik:source \"argument\" ;\n    ik:required false ;\n    ik:fixed \"<urn:example:count.rq>\" .\n\n<urn:ikigai:endpoint:count:input:limit> ik:inputName \"limit\" ;\n    ik:source \"argument\" ;\n    ik:required false .\n\n<urn:ikigai:contract:count:source:b3:ff39cc71af99813799c46ff56624e08ca59448b1f5386fc8a783028e2138972d:input:graph> ik:inputName \"graph\" ;\n    ik:source \"argument\" ;\n    ik:required false ;\n    ik:fixed \"urn:example:graph\" .\n\n<urn:ikigai:contract:count:source:b3:ff39cc71af99813799c46ff56624e08ca59448b1f5386fc8a783028e2138972d:input:query> ik:inputName \"query\" ;\n    ik:source \"argument\" ;\n    ik:required false ;\n    ik:fixed \"<urn:example:count.rq>\" .\n\n<urn:ikigai:contract:count:source:b3:ff39cc71af99813799c46ff56624e08ca59448b1f5386fc8a783028e2138972d:input:limit> ik:inputName \"limit\" ;\n    ik:source \"argument\" ;\n    ik:required false .\n\n<urn:ikigai:contract:count:source:b3:ff39cc71af99813799c46ff56624e08ca59448b1f5386fc8a783028e2138972d> a ik:Action ;\n    ik:verb \"Source\" ;\n    ik:input <urn:ikigai:contract:count:source:b3:ff39cc71af99813799c46ff56624e08ca59448b1f5386fc8a783028e2138972d:input:graph> ;\n    ik:input <urn:ikigai:contract:count:source:b3:ff39cc71af99813799c46ff56624e08ca59448b1f5386fc8a783028e2138972d:input:query> ;\n    ik:input <urn:ikigai:contract:count:source:b3:ff39cc71af99813799c46ff56624e08ca59448b1f5386fc8a783028e2138972d:input:limit> .\n"
+  }
+}
