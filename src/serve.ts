@@ -154,6 +154,8 @@ export interface ArgSpecInput {
    * input, so it is never required (as core's `fixed_to`).
    */
   fixed?: string;
+  /** Whether this input reads its value as a request body. */
+  readsBody?: boolean;
 }
 
 /** How a list-valued argument's items are separated in its one value. */
@@ -246,6 +248,8 @@ export class ArgSpec {
   readonly values: ReadonlyMap<string, ValueNote>;
   /** The value a named request fixes it to, or `null` when it is not fixed. */
   readonly fixed: string | null;
+  /** Whether this input declares body reading; undefined when absent. */
+  readonly readsBody: boolean | undefined;
 
   /**
    * From a bare name (a required `argument` with no summary), a spec object,
@@ -267,6 +271,7 @@ export class ArgSpec {
       this.list = spec.list;
       this.values = spec.values;
       this.fixed = spec.fixed;
+      this.readsBody = spec.readsBody;
       return;
     }
     const input: ArgSpecInput = typeof spec === "string"
@@ -288,6 +293,7 @@ export class ArgSpec {
     this.needs = [...(input.needs ?? [])];
     this.list = input.list ?? null;
     this.fixed = input.fixed ?? null;
+    this.readsBody = input.readsBody;
     const notes = input.values ?? {};
     this.values = new Map(
       wire.sortedUtf8(Object.keys(notes)).map((value) => [value, {
@@ -327,6 +333,7 @@ export class ArgSpec {
       out["values"] = values;
     }
     if (this.fixed !== null) out["fixed"] = this.fixed;
+    if (this.readsBody !== undefined) out["reads_body"] = this.readsBody;
     return out;
   }
 }
@@ -701,6 +708,7 @@ function descriptionTurtle(d: DescriptionModel): string {
     }
     // Only on a named request's contract (ledger #2512), as core writes it.
     if (arg.fixed !== null) node += ` ;\n    ik:fixed ${lit(arg.fixed)}`;
+    if (arg.readsBody) node += " ;\n    ik:readsBody true";
     for (const value of arg.values.keys()) {
       node += ` ;\n    ik:valueNote <${valueNodeIri(owner, arg.name, value)}>`;
     }

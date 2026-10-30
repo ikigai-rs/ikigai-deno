@@ -338,8 +338,8 @@ function canonicalInput(input: ArgSpec): CanonicalInput {
  * **Two forms, chosen by content** (ledger #1547). A contract that uses a
  * construct v1 cannot carry (an input's `needs`, `list`, value notes,
  * examples or empty enumeration, a group, an open or envelope argument set,
- * `output_from`, stated failure classes, existence sensitivity, an input a
- * named request fixes) is digested under `ikigai:contract:v2` instead (core's
+ * `output_from`, stated failure classes, existence sensitivity, a body reader,
+ * an input a named request fixes) is digested under `ikigai:contract:v2` instead (core's
  * `contract_id_v2`; the byte layout is in core's `tests/vectors/README.md`);
  * every other contract keeps its v1 digest, so no existing IRI moves.
  */
@@ -376,7 +376,7 @@ function usesV2(spec: ActionSpecModel): boolean {
     spec.inputs.some((i) =>
       i.needs.length > 0 || i.list !== null || i.values.size > 0 ||
       i.examples.length > 0 || (i.enumerated && i.oneOf.length === 0) ||
-      i.fixed !== null
+      i.readsBody || i.fixed !== null
     );
 }
 
@@ -455,10 +455,15 @@ function contractIdV2(endpointId: string, spec: ActionSpecModel): string {
   }
   // Core 0.2.2: byte 2 follows the failure classes, only when sensitive.
   if (spec.existenceSensitive) h.u8(2);
-  // Core's tail `3` (inputs read as a body, ledger #2402) has no model here
-  // yet, so it is never fed. The inputs a named request fixes (ledger #2512)
-  // follow it, only when there are any, as the byte `4` and the set of `name`
-  // NUL `value` strings: a contract that fixes none keeps its digest.
+  // Body readers follow failure classes and existence sensitivity, only when
+  // any input declares the flag. feed_set sorts and deduplicates their names.
+  const bodyReaders = spec.inputs.filter((i) => i.readsBody).map((i) => i.name);
+  if (bodyReaders.length > 0) {
+    h.u8(3);
+    h.set(bodyReaders);
+  }
+  // The inputs a named request fixes (ledger #2512) follow body readers, only
+  // when there are any, as byte `4` and the set of `name` NUL `value` strings.
   const fixed = spec.inputs.filter((i) => i.fixed !== null)
     .map((i) => `${i.name}\0${i.fixed}`);
   if (fixed.length > 0) {
