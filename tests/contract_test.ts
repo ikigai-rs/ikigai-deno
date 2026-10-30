@@ -408,3 +408,18 @@ Deno.test("false existence sensitivity is omitted from JSON and Turtle", () => {
   assertEquals(door.descriptionJson(), unflagged.descriptionJson());
   assertStrictEquals(door.descriptionTurtle(), unflagged.descriptionTurtle());
 });
+
+Deno.test("body-reader declarations survive ArgSpec copies, including explicit false", () => {
+  for (const readsBody of [undefined, false, true]) {
+    const input = new ArgSpec({ name: "content", readsBody });
+    const copied = new ArgSpec(input);
+    assertStrictEquals(copied.readsBody, readsBody);
+    assertEquals(copied.toJson(), {
+      name: "content",
+      summary: "",
+      required: true,
+      source: "argument",
+      ...(readsBody === undefined ? {} : { reads_body: readsBody }),
+    });
+  }
+});

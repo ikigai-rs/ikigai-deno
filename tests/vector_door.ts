@@ -50,6 +50,7 @@ export function argSpec(json: Json): ArgSpec {
   if ("values" in json) {
     input.values = json["values"] as Record<string, ValueNoteInput>;
   }
+  if ("reads_body" in json) input.readsBody = json["reads_body"] as boolean;
   if ("fixed" in json) input.fixed = json["fixed"] as string;
   return new ArgSpec(input);
 }
