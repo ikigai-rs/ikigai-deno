@@ -618,6 +618,13 @@ record the layout. Highlights a public ABI document should state:
   `Number.MAX_SAFE_INTEGER` (2^53 − 1); beyond that this implementation fails
   loud rather than lose precision. No value in practice comes close.
 
+## Accessibility
+
+[ACCESSIBILITY.md](https://github.com/ikigai-rs/ikigai-deno/blob/main/ACCESSIBILITY.md)
+says what this package and its examples emit that people read (error messages,
+the plain-text description, the examples' pages), the rules that output follows,
+what is tested, the known limitations, and how to report a barrier.
+
 ## License
 
 MIT OR Apache-2.0, at your option.
