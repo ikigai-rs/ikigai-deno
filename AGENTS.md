@@ -7,7 +7,7 @@ ikigai wire protocol.
   read: messages, pages, terminal text.
 - Run `just gates` (the `deno.json` tasks CI runs) before opening a pull
   request.
-- Security reports go through [private vulnerability
-  reporting](https://github.com/ikigai-rs/ikigai-deno/security/advisories/new),
+- Security reports go through
+  [private vulnerability reporting](https://github.com/ikigai-rs/ikigai-deno/security/advisories/new),
   never a public issue.
 - Write American spelling (behavior, color, labeled).

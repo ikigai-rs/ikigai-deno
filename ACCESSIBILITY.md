@@ -3,8 +3,8 @@
 What `ikigai-deno` emits that people read (error messages, a plain-text
 description face, one console line, and the HTML of its examples), the rules
 that output follows, how it is tested, and how to report a barrier. It is not a
-conformance claim. Adapted from the [ACCESSIBILITY.md
-template](https://github.com/mgifford/ACCESSIBILITY.md) (MIT).
+conformance claim. Adapted from the
+[ACCESSIBILITY.md template](https://github.com/mgifford/ACCESSIBILITY.md) (MIT).
 
 | Field            | Value                                                                                                                                                                                                                                                              |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -102,7 +102,7 @@ assistive technology:
   (`varint too long`, `invalid Option tag 0x…`, `unexpected reply to …`); they
   are meant for implementors, but they reach whoever calls the client.
 - The plain-text description writes an input with no summary as a line ending in
-  a bare colon (`input suffix [argument] (optional): `).
+  a bare colon, with nothing after it.
 
 ## Contributing
 
@@ -114,13 +114,12 @@ what was not.
 
 ## Reporting a barrier
 
-[Open an
-issue](https://github.com/ikigai-rs/ikigai-deno/issues/new?labels=accessibility)
+[Open an issue](https://github.com/ikigai-rs/ikigai-deno/issues/new?labels=accessibility)
 with the `accessibility` label (the link sets it when GitHub lets you add
 labels; otherwise a maintainer adds it): what you were doing, what happened, and
 your browser or terminal and any assistive technology, if you are comfortable
-sharing them. Anything security-sensitive goes through [private vulnerability
-reporting](https://github.com/ikigai-rs/ikigai-deno/security/advisories/new).
+sharing them. Anything security-sensitive goes through
+[private vulnerability reporting](https://github.com/ikigai-rs/ikigai-deno/security/advisories/new).
 **We acknowledge a report within 7 days**, and promise nothing further.
 
 ## Change history
