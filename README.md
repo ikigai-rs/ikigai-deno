@@ -583,6 +583,15 @@ door declares for the request's verb, or the call is refused as a typed `Denied`
   door resolves its owner's plain `Issue`: the socket's `0600` mode makes every
   connecting peer the owner, so the owner's ceiling is root and a carried
   capability is used as carried.
+- An existence-sensitive door (`existence_sensitive` in its description, flat or
+  per verb; core 0.2.2) conceals instead of refusing: a call the floor would
+  refuse there gets EXACTLY this peer's own miss, a typed `Unresolved` naming
+  the target (404 at an HTTP face), never `Denied`. A refused declared verb
+  conceals when its own action is marked (an explicit action's flag replaces the
+  flat one); a refused undeclared verb when anything is marked; Meta when
+  anything is marked and the caller passes no declared verb's floor
+  (`ServedDef.conceals`). The `endpoint` and `family` builders cannot mark a
+  door yet, so today this applies to a `ServedDef` whose description does.
 
 A handler does not see the caller's capability, so a finer, argument-dependent
 gate (a path or host ACL) is not expressible here yet; the floor is the coarse

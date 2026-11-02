@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — existence-sensitive doors conceal at the floor (core 0.2.2, ledger #2890)
+
+- **Security fix.** The served floor (`Space.dispatch`) answered `Denied` for a
+  door whose description marks its existence sensitive, so a refused caller
+  learned the name was bound: the leak core 0.2.2 closed (ledger #2176). It now
+  answers such a request exactly as a name bound nowhere: the same typed
+  `Unresolved` for the target, with no trace event and no handler entered, by
+  core's `Floor::conceals` rule (declared verb: its own flag; undeclared verb:
+  any flag; Meta: any flag and no declared verb's floor passed). New
+  `ServedDef.conceals(verb, capability)`.
+- `tests/capability_vectors.json` refreshed verbatim from ikigai-core main
+  (c3cc984), adding the 23 `sensitive-*` denial rows, 12 of them concealed
+  (`unresolved`); the denials test reads that key and checks each concealed
+  answer equals an empty space's miss.
+
 ## Unreleased — tic-tac-toe parity follows today's ttt-host; interop pins ikigai-cli 0.2.8 (ledger #2845)
 
 - **The parity test was stale, not the door.** It runs against `ttt-host`

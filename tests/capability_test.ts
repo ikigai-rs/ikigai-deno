@@ -14,20 +14,35 @@
  * The second half is face-local: the public builders declare what core's table
  * expects, and the floor at dispatch refuses an under-capable `issueAs` typed
  * before the handler runs, runs a covering one, and resolves a plain `issue`
- * under root.
+ * under root. The last part pins existence sensitivity (ledger #2176, #2890):
+ * a door that marks it answers a refused caller exactly as a miss.
  */
 
 import { assert, assertEquals, assertStrictEquals } from "@std/assert";
 import {
+  CacheStatus,
   type Call,
   Capability,
   inline,
   isDenyScope,
   type Reply,
+  Representation,
+  type Request,
   Verb,
 } from "../src/wire.ts";
-import { endpoint, family, Space } from "../src/serve.ts";
-import { type Json, VectorDoor, verbOf } from "./vector_door.ts";
+import {
+  type DescriptionModel,
+  endpoint,
+  family,
+  ServedDef,
+  Space,
+} from "../src/serve.ts";
+import {
+  descriptionModel,
+  type Json,
+  VectorDoor,
+  verbOf,
+} from "./vector_door.ts";
 
 // ---------------------------------------------------------------------------
 // Core's shared capability vectors
@@ -58,6 +73,8 @@ const VECTORS: {
     verb: string;
     capability: Held;
     denied: string | null;
+    /** Present only on a row the kernel conceals: the IRI its miss names. */
+    unresolved?: string;
   }[];
 } = JSON.parse(
   await Deno.readTextFile(
@@ -131,28 +148,72 @@ Deno.test("floors: requiredScopes is core's Description::required_scopes", () =>
   }
 });
 
-Deno.test("denials: the floor at dispatch refuses with the kernel's text", async () => {
+Deno.test("denials: the floor at dispatch refuses with the kernel's text, or conceals as a miss", async () => {
+  // What a space that binds NOTHING answers for a name: the face's own miss
+  // arm, which a concealed request must reproduce exactly (core's
+  // `concealed_rows_answer_as_a_kernel_that_binds_nothing`).
+  const miss = (target: string, verb: Verb) =>
+    new Space([], { stripAlias: false }).dispatch({
+      kind: "issueAs",
+      request: { verb, target, args: {} },
+      capability: Capability.root(),
+    });
+  const wrong: string[] = [];
   for (const row of VECTORS.denials) {
     const space = new Space([new VectorDoor(row.description, row.target)], {
       stripAlias: false,
     });
+    const verb = verbOf(row.verb);
     const call: Call = {
       kind: "issueAs",
-      request: { verb: verbOf(row.verb), target: row.target, args: {} },
+      request: { verb, target: row.target, args: {} },
       capability: capability(row.capability),
     };
-    let refused: string | null = null;
+    let reply: Reply | null = null;
     try {
-      const reply = await space.dispatch(call);
-      if (reply.kind === "errorTyped" && reply.failure.kind === "denied") {
-        refused = reply.failure.message;
-      }
+      reply = await space.dispatch(call);
     } catch {
       // A vector door answers Meta only, so an admitted Source, Sink, Exists or
       // Delete reaches it and throws: the floor let the request through.
     }
-    assertStrictEquals(refused, row.denied, row.name);
+    const refused = reply?.kind === "errorTyped" &&
+        reply.failure.kind === "denied"
+      ? reply.failure.message
+      : null;
+    const missed = reply?.kind === "errorTyped" &&
+        reply.failure.kind === "unresolved"
+      ? reply.failure.iri
+      : null;
+    const expected = row.unresolved ?? null;
+    if (refused !== row.denied || missed !== expected) {
+      wrong.push(
+        `${row.name}: denied ${JSON.stringify(refused)} unresolved ` +
+          `${JSON.stringify(missed)}, expected denied ` +
+          `${JSON.stringify(row.denied)} unresolved ${
+            JSON.stringify(expected)
+          }`,
+      );
+      continue;
+    }
+    if (row.unresolved !== undefined) {
+      // Nothing more than a miss: the same reply, field for field.
+      assertEquals(reply, await miss(row.unresolved, verb), row.name);
+    }
   }
+  assertEquals(wrong, []);
+});
+
+Deno.test("the concealment rows are all there", () => {
+  // The rows core added for existence sensitivity (ledger #2434): twelve of
+  // them conceal. A copy that predates them would pass the test above.
+  const sensitive = VECTORS.denials.filter((r) =>
+    r.name.startsWith("sensitive-")
+  );
+  assertStrictEquals(sensitive.length, 23);
+  assertStrictEquals(
+    sensitive.filter((r) => r.unresolved !== undefined).length,
+    12,
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -436,4 +497,224 @@ Deno.test("issueTraced is floored under the capability it carries", async () => 
   const ok = await space.dispatch(call(["urn:cap:ts:secret:read"]));
   assertStrictEquals(ok.kind, "resolvedTraced");
   assertEquals(entered, ["secret"]);
+});
+
+// ---------------------------------------------------------------------------
+// Existence sensitivity at the floor (ledger #2176, #2890)
+// ---------------------------------------------------------------------------
+
+/**
+ * A door over a serde description that ANSWERS every verb, counting entries,
+ * so a concealment can be shown to enter nothing and an admission to enter.
+ * The public builders cannot mark a door existence sensitive, so these doors
+ * are built from the description, as the shared vectors are.
+ */
+class SensitiveDoor extends ServedDef {
+  readonly #model: DescriptionModel;
+
+  constructor(json: Json, pattern: string, readonly entered: string[]) {
+    super(pattern, {}, json["id"] as string);
+    this.#model = descriptionModel(json);
+  }
+
+  description(): DescriptionModel {
+    return this.#model;
+  }
+
+  answer(r: Request): Promise<Reply> {
+    this.entered.push(Verb[r.verb]);
+    return Promise.resolve({
+      kind: "resolved",
+      representation: new Representation("in", "text/plain;charset=utf-8"),
+      cacheStatus: CacheStatus.Uncacheable,
+    });
+  }
+
+  protected answeredVerbs(): Verb[] {
+    return [Verb.Source, Verb.Sink, Verb.Exists, Verb.Delete, Verb.Meta];
+  }
+}
+
+const VAULT = "urn:ts:vault";
+const READ = "urn:cap:vault:read";
+const WRITE = "urn:cap:vault:write";
+
+const describe = (fields: Json): Json => ({
+  id: "vault",
+  title: "",
+  summary: "",
+  inputs: [],
+  outputs: [],
+  ...fields,
+});
+
+/** Flat: Source declared, every verb marked. */
+const FLAT = describe({
+  verbs: ["Source", "Meta"],
+  requires: [READ],
+  existence_sensitive: true,
+});
+
+/** Per verb: an unmarked Source beside a marked Sink. */
+const PER_VERB = describe({
+  verbs: ["Source", "Sink", "Meta"],
+  actions: [
+    { verb: "Source", requires: [READ] },
+    { verb: "Sink", requires: [WRITE], existence_sensitive: true },
+  ],
+});
+
+/** Flat-marked, with an explicit Sink that is NOT (its flag replaces the flat one). */
+const REPLACED = describe({
+  verbs: ["Source", "Sink", "Meta"],
+  requires: [READ],
+  existence_sensitive: true,
+  actions: [{ verb: "Sink", requires: [WRITE] }],
+});
+
+function vault(json: Json) {
+  const entered: string[] = [];
+  const space = new Space([new SensitiveDoor(json, VAULT, entered)], {
+    stripAlias: false,
+  });
+  return { space, entered };
+}
+
+/** What a space binding nothing answers this call: the face's own miss. */
+const missFor = (call: Call) =>
+  new Space([], { stripAlias: false }).dispatch(call);
+
+/** Assert `call` is answered EXACTLY as a miss, and return nothing else. */
+async function concealed(space: Space, call: Call) {
+  const reply = await space.dispatch(call);
+  assertEquals(reply, await missFor(call));
+  assertEquals(reply, {
+    kind: "errorTyped",
+    failure: { kind: "unresolved", iri: VAULT },
+  });
+}
+
+Deno.test("flat sensitive: a refused caller gets a miss, on a declared, undeclared and Meta verb", async () => {
+  const { space, entered } = vault(FLAT);
+  await concealed(space, issueAs(Verb.Source, VAULT, []));
+  await concealed(space, issueAs(Verb.Source, VAULT, [WRITE]));
+  // Exists and Sink are undeclared here: they conceal because the door is marked.
+  await concealed(space, issueAs(Verb.Exists, VAULT, []));
+  await concealed(space, issueAs(Verb.Sink, VAULT, [], { content: "x" }));
+  await concealed(space, issueAs(Verb.Meta, VAULT, []));
+  assertEquals(entered, []);
+  // A caller the floor admits is answered as usual.
+  assertStrictEquals(
+    text(await space.dispatch(issueAs(Verb.Source, VAULT, [READ]))),
+    "in",
+  );
+  assertStrictEquals(
+    text(
+      await space.dispatch(
+        issueAs(Verb.Meta, VAULT, [READ], { as: "application/json" }),
+      ),
+    ).includes(READ),
+    true,
+  );
+  assertEquals(entered, ["Source"]);
+});
+
+Deno.test("per-verb sensitive: only the marked verb conceals; an unmarked one is still Denied", async () => {
+  const { space, entered } = vault(PER_VERB);
+  // The unmarked Source refuses as before: Denied, with the kernel's text.
+  assertStrictEquals(
+    denied(await space.dispatch(issueAs(Verb.Source, VAULT, []))),
+    `capability does not grant \`${READ}\` (declared by \`${VAULT}\`)`,
+  );
+  // The marked Sink conceals, from a reader too.
+  await concealed(space, issueAs(Verb.Sink, VAULT, [], { content: "x" }));
+  await concealed(space, issueAs(Verb.Sink, VAULT, [READ], { content: "x" }));
+  // An undeclared verb conceals when ANYTHING is marked.
+  await concealed(space, issueAs(Verb.Delete, VAULT, [READ]));
+  await concealed(space, issueAs(Verb.Exists, VAULT, []));
+  assertEquals(entered, []);
+  assertStrictEquals(
+    text(
+      await space.dispatch(
+        issueAs(Verb.Sink, VAULT, [WRITE], { content: "x" }),
+      ),
+    ),
+    "in",
+  );
+  assertEquals(entered, ["Sink"]);
+});
+
+Deno.test("an explicit unmarked action replaces a marked flat flag", async () => {
+  const { space, entered } = vault(REPLACED);
+  assertStrictEquals(
+    denied(
+      await space.dispatch(issueAs(Verb.Sink, VAULT, [], { content: "x" })),
+    ),
+    `capability does not grant \`${WRITE}\` (declared by \`${VAULT}\`)`,
+  );
+  // Source has no explicit action, so the flat flag still marks it.
+  await concealed(space, issueAs(Verb.Source, VAULT, []));
+  assertEquals(entered, []);
+});
+
+Deno.test("sensitive Meta: concealed unless the caller passes some declared verb's floor", async () => {
+  const { space } = vault(PER_VERB);
+  await concealed(space, issueAs(Verb.Meta, VAULT, []));
+  await concealed(space, issueAs(Verb.Meta, VAULT, ["urn:cap:other"]));
+  // Passing ONE declared verb's floor (Source's, or Sink's) is enough.
+  for (const held of [[READ], [WRITE]]) {
+    const meta = await space.dispatch(
+      issueAs(Verb.Meta, VAULT, held, { as: "application/json" }),
+    );
+    assert(text(meta).includes(WRITE), JSON.stringify(held));
+  }
+  // With no declared verb, the floor of the union decides.
+  const bare = vault(describe({
+    verbs: ["Meta"],
+    requires: ["urn:cap:secret"],
+    existence_sensitive: true,
+  })).space;
+  await concealed(bare, issueAs(Verb.Meta, VAULT, []));
+  text(await bare.dispatch(issueAs(Verb.Meta, VAULT, ["urn:cap:secret"])));
+});
+
+Deno.test("concealment: nothing required conceals nothing, and root and a plain issue see the door", async () => {
+  const open = vault(describe({
+    verbs: ["Source", "Meta"],
+    existence_sensitive: true,
+  }));
+  assertStrictEquals(
+    text(await open.space.dispatch(issueAs(Verb.Source, VAULT, []))),
+    "in",
+  );
+  const { space, entered } = vault(FLAT);
+  text(
+    await space.dispatch({
+      kind: "issueAs",
+      request: request(Verb.Source, VAULT),
+      capability: Capability.root(),
+    }),
+  );
+  text(
+    await space.dispatch({
+      kind: "issue",
+      request: request(Verb.Source, VAULT),
+    }),
+  );
+  assertEquals(entered, ["Source", "Source"]);
+});
+
+Deno.test("a concealed issueTraced records nothing a miss would not", async () => {
+  const { space, entered } = vault(FLAT);
+  const call: Call = {
+    kind: "issueTraced",
+    request: request(Verb.Source, VAULT),
+    capability: Capability.scoped([]),
+    context: { traceId: 7, parentSpan: null },
+  };
+  const reply = await space.dispatch(call);
+  // A miss carries no trace events, so neither does a concealment.
+  assertEquals(reply, await missFor(call));
+  assertStrictEquals(reply.kind, "errorTyped");
+  assertEquals(entered, []);
 });

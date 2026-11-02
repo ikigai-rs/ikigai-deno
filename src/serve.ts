@@ -538,6 +538,18 @@ function requiredScopes(d: DescriptionModel, verb: Verb): string[] {
     const source = declared.find((a) => a.verb === Verb.Source);
     if (source !== undefined) return [...source.requires];
   }
+  return everyScope(d, declared);
+}
+
+/**
+ * "Every `requires` it declares" (core's `Floor::every`): the union over
+ * the declared verbs' actions, deduplicated in declaration order; with no
+ * declared verb, the flat `requires` plus any actions' `requires`.
+ */
+function everyScope(
+  d: DescriptionModel,
+  declared: readonly ActionSpecModel[],
+): string[] {
   const every: string[] = [];
   const add = (scope: string) => {
     if (!every.includes(scope)) every.push(scope);
@@ -548,6 +560,47 @@ function requiredScopes(d: DescriptionModel, verb: Verb): string[] {
     for (const a of d.actions) a.requires.forEach(add);
   }
   return every;
+}
+
+/**
+ * Whether a request with `verb` under `capability` must be answered as a
+ * name bound nowhere (core's `Floor::conceals`, ledger #2176): the door
+ * marks its existence sensitive and the floor refuses the caller, so a
+ * refused caller cannot learn that the name exists.
+ *
+ * - A DECLARED verb conceals when its own action is marked (an explicit
+ *   action's flag REPLACES the flat one, like its `requires`) and the floor
+ *   refuses it.
+ * - An UNDECLARED verb (it needs what {@linkcode requiredScopes} says)
+ *   conceals when any part of the description is marked and the floor
+ *   refuses it.
+ * - `Meta`, which the floor never gates, conceals when the description is
+ *   marked anywhere and `capability` passes the floor of NO declared verb
+ *   (with no declared verb, of the union of everything declared): the
+ *   description would tell it what every verb hides.
+ *
+ * Nothing marked conceals nothing.
+ */
+function conceals(
+  d: DescriptionModel,
+  verb: Verb,
+  capability: wire.Capability,
+): boolean {
+  const declared = actionSpecs(d);
+  const anySensitive = d.existenceSensitive === true ||
+    d.actions.some((a) => a.existenceSensitive === true) ||
+    declared.some((a) => a.existenceSensitive === true);
+  if (!anySensitive) return false;
+  const passes = (scopes: readonly string[]) =>
+    scopes.every((s) => capability.satisfies(s));
+  if (verb === Verb.Meta) {
+    return declared.length === 0
+      ? !passes(everyScope(d, declared))
+      : !declared.some((a) => passes(a.requires));
+  }
+  const own = declared.find((a) => a.verb === verb);
+  const marked = own === undefined ? true : own.existenceSensitive === true;
+  return marked && !passes(requiredScopes(d, verb));
 }
 
 /**
@@ -1188,6 +1241,20 @@ export abstract class ServedDef {
     return this.requiredScopes(verb).filter((s) => !capability.satisfies(s));
   }
 
+  /**
+   * Whether a request with `verb` under `capability` is answered exactly as a
+   * name bound nowhere, rather than refused as `Denied` (core's
+   * `Floor::conceals`, ledger #2176): this door marks its existence
+   * sensitive (`existenceSensitive`, flat or per verb) and the floor refuses
+   * the caller. A refused declared verb conceals when its own action is
+   * marked; a refused undeclared verb when anything is marked; Meta, never
+   * floored, when anything is marked and the caller passes no declared
+   * verb's floor. {@linkcode Space.dispatch} reads it before the floor.
+   */
+  conceals(verb: Verb, capability: wire.Capability): boolean {
+    return conceals(this.description(), verb, capability);
+  }
+
   /** The human face (mirrors `ikigai_vocab::to_text`). */
   descriptionText(): string {
     return descriptionText(this.description());
@@ -1753,6 +1820,11 @@ export class Space {
    * its owner (mode `0600`), so the owner's authority is root and a carried
    * capability needs no clamp (root's clamp of `c` is `c`). Meta is never
    * floored: self-description stays readable.
+   *
+   * **An existence-sensitive door conceals instead of refusing**
+   * ({@linkcode ServedDef.conceals}, core 0.2.2): a request the floor would
+   * refuse there, and a Meta from a caller it refuses on every verb, gets
+   * exactly this space's `unresolved` for the name, never `Denied`.
    */
   async dispatch(
     call: wire.Call,
@@ -1850,7 +1922,11 @@ export class Space {
     run: RunContext = NO_RUN,
   ): Promise<Reply> {
     const hit = this.lookup(request.target, aliasFirst);
-    if (hit === null) {
+    // EXISTENCE-SENSITIVE (ledger #2176): a door that hides its existence
+    // from a caller the floor refuses (Meta included) answers exactly as the
+    // miss arm does, under the name asked for, and nothing else is recorded:
+    // a miss records nothing either (no trace, no handler entered).
+    if (hit === null || hit.def.conceals(request.verb, capability)) {
       // A real Unresolved (v7): the host-side client rebuilds the same
       // variant — and the same rendering — the Rust kernel would produce.
       return {
