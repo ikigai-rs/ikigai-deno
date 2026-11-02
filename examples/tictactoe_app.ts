@@ -565,6 +565,9 @@ export function isIri(rest: string): boolean {
     .test(rest);
 }
 
+/** The RFC 3986 gen-delims, which a strict route `{var}` refuses in its value. */
+const GEN_DELIMS = [":", "/", "?", "#", "[", "]", "@"];
+
 /** A game's view, as a request names it. */
 export type View = "board" | "status" | "reset" | {
   x: string;
@@ -596,6 +599,16 @@ export function route(path: string): Route {
   }
   if (segments.length === 2 && segments[0] === "game") {
     const game = segments[1];
+    // The page route `/game/{id}` is a strict `{var}` (`ikigai-web` 0.1.37
+    // and later): a decoded value carrying a gen-delim is refused, naming
+    // the first one, before anything resolves.
+    const delim = [...game].find((c) => GEN_DELIMS.includes(c));
+    if (delim !== undefined) {
+      throw new PathError(
+        `route variable {id} cannot carry '${delim}': a strict {var} ` +
+          "refuses : / ? # [ ] @",
+      );
+    }
     return { kind: "page", game, iri: `urn:ttt-host:page:game:${game}` };
   }
   const file = `/static/${segments[1]}`;
@@ -660,8 +673,9 @@ function allowOf(verb: "source" | "sink" | null): string {
  * resources, not a proxy for them. What the host's edge does, in its order:
  *
  * 1. a malformed percent-escape, or a segment that is not UTF-8 once
- *    decoded → `400` saying which; a path that is not an IRI →
- *    `400 not a resource path`;
+ *    decoded → `400` saying which; a page's game carrying a gen-delim
+ *    (`/game/a%2Fb`) → `400` naming it, the strict `{id}`; a path that is
+ *    not an IRI → `400 not a resource path`;
  * 2. `OPTIONS` → `204` with the `Allow` list; a method with no verb → `405`;
  * 3. a game the host does not serve declares nothing, so it has no `405`:
  *    `PATCH` → `415`, anything else → `404 no endpoint resolved for <iri>`;

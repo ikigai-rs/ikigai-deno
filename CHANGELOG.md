@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased — tic-tac-toe parity follows today's ttt-host; interop pins ikigai-cli 0.2.8 (ledger #2845)
+
+- **The parity test was stale, not the door.** It runs against `ttt-host`
+  (ikigai-tutorial), not the `ikigai` cli, and CI has no `ttt-host`, so CI
+  skipped it whatever the cli pin. Against a `ttt-host` built since
+  ikigai-tutorial PR 138 (ledger #585) it failed in three places, each a
+  deliberate host change:
+  - a refused play is a `Conflict` the view lets through, not a reply it
+    answers, so the host half now expects `ConflictError` whose `display()` is
+    the app's 409 body;
+  - off the board names the coordinate that is off (`invalid argument \`x\``),
+    not the pair;
+  - the page route `/game/{id}` is a strict `{var}` (`ikigai-web` 0.1.37 and
+    later): a game carrying one of `: / ? # [ ] @` once decoded is
+    `400 route variable {id} cannot carry '…'`. The app now refuses it the same
+    way (`route()` throws `PathError`), pinned by a unit test and the existing
+    `/game/a%2Fb/` edge.
+- **CI `interop` job** pins `IKIGAI_CLI_VERSION` 0.2.8, the current cli. Every
+  interop test passed unchanged locally against cli 0.2.3.
+
 ## Unreleased — strict percent decoding (ikigai-fn 0.9.0, ledger #2838)
 
 - `percentDecode(text, plusIsSpace)` and
