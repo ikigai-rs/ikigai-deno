@@ -8,6 +8,7 @@
  * | element text: `<p>${…}</p>` | {@link htmlText} |
  * | a quoted attribute: `title="${…}"` or `title='${…}'` | {@link attr} |
  * | one path segment or query value: `/item/${…}?q=${…}` | {@link urlSegment} |
+ * | reading one back: a segment or (`plusIsSpace`) a form value | {@link percentDecode}, {@link percentDecodeBytes} |
  * | a whole link target from data: `href="${…}"` | {@link safeHref}, then {@link attr} |
  * | htmx's `hx-vals='${…}'` | {@link jsonAttr} |
  *
@@ -74,6 +75,117 @@ export function urlSegment(value: string): string {
     }
   }
   return out;
+}
+
+/** Why {@link percentDecode} or {@link percentDecodeBytes} refused an input. */
+export type PercentDecodeErrorKind = "malformed_escape" | "invalid_utf8";
+
+/**
+ * A refused percent-decode: `kind` says why, as the shared vectors name it.
+ * `malformed_escape` carries the input BYTE `offset` of the `%` that was not
+ * followed by two hex digits; `invalid_utf8` (the text form only) has none.
+ */
+export class PercentDecodeError extends Error {
+  /** Why the input was refused. */
+  readonly kind: PercentDecodeErrorKind;
+  /** For `malformed_escape`, the byte offset of the bad `%` in the input. */
+  readonly offset: number | undefined;
+  /** An error of `kind`, at `offset` for a malformed escape. */
+  constructor(
+    kind: PercentDecodeErrorKind,
+    offset?: number,
+    options?: ErrorOptions,
+  ) {
+    super(
+      kind === "malformed_escape"
+        ? `percent_decode: malformed percent-escape at byte ${offset}`
+        : "percent_decode: decoded bytes are not UTF-8",
+      options,
+    );
+    this.name = "PercentDecodeError";
+    this.kind = kind;
+    this.offset = kind === "malformed_escape" ? offset : undefined;
+  }
+}
+
+/** The value of one ASCII hex digit byte, or -1. */
+function hexDigit(byte: number | undefined): number {
+  if (byte === undefined) return -1;
+  if (byte >= 0x30 && byte <= 0x39) return byte - 0x30;
+  if (byte >= 0x41 && byte <= 0x46) return byte - 0x41 + 10;
+  if (byte >= 0x61 && byte <= 0x66) return byte - 0x61 + 10;
+  return -1;
+}
+
+/**
+ * Decode `%XX` escapes in `data` into bytes, exactly once, refusing every
+ * malformed escape. Upper and lower hex are accepted; `+` becomes a space only
+ * when `plusIsSpace`, and an escaped plus (`%2B`) stays a plus either way.
+ * Every other byte passes through, so the result may hold any bytes.
+ *
+ * @throws {PercentDecodeError} `malformed_escape`, at the input byte offset of
+ * a `%` not followed by two hex digits.
+ *
+ * ```ts
+ * import { percentDecodeBytes } from "@ikigai/wire/html";
+ * import { assertEquals } from "@std/assert";
+ * const raw = new TextEncoder().encode("%FF+%2b");
+ * assertEquals(percentDecodeBytes(raw, true), new Uint8Array([0xFF, 0x20, 0x2B]));
+ * ```
+ */
+export function percentDecodeBytes(
+  data: Uint8Array,
+  plusIsSpace: boolean,
+): Uint8Array {
+  const out = new Uint8Array(data.length);
+  let n = 0;
+  let i = 0;
+  while (i < data.length) {
+    const byte = data[i];
+    if (byte === 0x25) {
+      const hi = hexDigit(data[i + 1]);
+      const lo = hexDigit(data[i + 2]);
+      if (hi < 0 || lo < 0) throw new PercentDecodeError("malformed_escape", i);
+      out[n++] = (hi << 4) | lo;
+      i += 3;
+    } else {
+      out[n++] = byte === 0x2B && plusIsSpace ? 0x20 : byte;
+      i += 1;
+    }
+  }
+  return out.slice(0, n);
+}
+
+/**
+ * Decode `%XX` escapes in `text` exactly once, refusing malformed escapes and
+ * decoded bytes that are not UTF-8. Choose `plusIsSpace` explicitly: `true`
+ * for a form or query value, `false` for a path segment. `text` is read as
+ * UTF-8, so an error offset is a byte offset, not a UTF-16 index. Decoding
+ * does not escape HTML or validate a link: the result is still data, for
+ * {@link htmlText}, {@link attr} or {@link safeHref}.
+ *
+ * Not `decodeURIComponent`: that refuses with no offset and never reads `+`.
+ *
+ * @throws {PercentDecodeError} `malformed_escape` with the input byte offset,
+ * or `invalid_utf8` (use {@link percentDecodeBytes} for binary data).
+ *
+ * ```ts
+ * import { percentDecode, urlSegment } from "@ikigai/wire/html";
+ * import { assertEquals } from "@std/assert";
+ * assertEquals(percentDecode("caf%C3%A9+a", true), "café a");
+ * assertEquals(percentDecode("a+b%2Bc", false), "a+b+c");
+ * assertEquals(percentDecode(urlSegment("café + %"), false), "café + %");
+ * ```
+ */
+export function percentDecode(text: string, plusIsSpace: boolean): string {
+  const bytes = percentDecodeBytes(new TextEncoder().encode(text), plusIsSpace);
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      bytes,
+    );
+  } catch (cause) {
+    throw new PercentDecodeError("invalid_utf8", undefined, { cause });
+  }
 }
 
 /**
