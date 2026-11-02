@@ -7,8 +7,11 @@
  * the bytes the Rust views compose for the same game, fetched over IPC. If
  * they differ, the TypeScript filler is wrong, not the template.
  *
- * The host half skips when no `ttt-host` binary is found (CI has no Rust
- * host): `$TTT_HOST`, then `~/.local/ttt-host/bin/ttt-host`, then `PATH`.
+ * The host half finds `ttt-host` at `$TTT_HOST`, then
+ * `~/.local/ttt-host/bin/ttt-host`, then `PATH`. Locally it skips, saying so,
+ * when none is found; with `CI` set it FAILS instead (CI's interop job builds
+ * one at the ikigai-tutorial rev ci.yml pins), unless `TTT_HOST_OPTIONAL` is
+ * set, as the job that runs no Rust host sets it.
  */
 
 import {
@@ -974,6 +977,27 @@ function findTttHost(): string | null {
 
 const TTT_HOST = findTttHost();
 
+/** What to do when no `ttt-host` is found: one sentence, for a skip or a failure. */
+const TTT_HOST_MISSING =
+  "no ttt-host was found ($TTT_HOST, ~/.local/ttt-host/bin/ttt-host, then PATH); " +
+  "build one at the ikigai-tutorial rev .github/workflows/ci.yml pins as TTT_HOST_REV with " +
+  "`cargo install --git https://github.com/ikigai-rs/ikigai-tutorial --rev <TTT_HOST_REV> " +
+  "--locked ttt-host --root ~/.local/ttt-host` (the ikigai-cli pin does not cover it), " +
+  "or set TTT_HOST to the binary";
+
+/**
+ * In CI the parity test is REQUIRED: a missing host fails it rather than
+ * skipping it, so a host change cannot go unseen while the test sits skipped.
+ * A CI job that runs it elsewhere opts out by setting `TTT_HOST_OPTIONAL`.
+ */
+const PARITY_REQUIRED = !["", "0", "false"].includes(
+  (Deno.env.get("CI") ?? "").toLowerCase(),
+) && !Deno.env.get("TTT_HOST_OPTIONAL");
+
+if (TTT_HOST === null && !PARITY_REQUIRED) {
+  console.warn(`ttt app: skipping the parity test: ${TTT_HOST_MISSING}.`);
+}
+
 /** A port nothing is listening on, for the host's HTTP face. */
 function freePort(): number {
   const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
@@ -985,8 +1009,13 @@ function freePort(): number {
 Deno.test({
   name:
     "ttt app: parity — the TypeScript views are the Rust views, byte for byte",
-  ignore: TTT_HOST === null,
+  ignore: TTT_HOST === null && !PARITY_REQUIRED,
   async fn() {
+    if (TTT_HOST === null) {
+      throw new Error(
+        `the parity test is required in CI, and ${TTT_HOST_MISSING}.`,
+      );
+    }
     // A short path: macOS caps a socket path at 104 bytes.
     const dir = Deno.makeTempDirSync({ prefix: "ttt-" });
     const socket = `${dir}/h.sock`;
