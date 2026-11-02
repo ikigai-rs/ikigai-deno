@@ -718,3 +718,106 @@ Deno.test("a concealed issueTraced records nothing a miss would not", async () =
   assertStrictEquals(reply.kind, "errorTyped");
   assertEquals(entered, []);
 });
+
+Deno.test("public builders: a sensitive endpoint conceals before entering its handler", async () => {
+  let entered = 0;
+  const door = endpoint(VAULT, {
+    requires: [READ],
+    existenceSensitive: true,
+  }, () => {
+    entered++;
+    return "in";
+  });
+  const space = new Space([door], { stripAlias: false });
+  for (const verb of [Verb.Source, Verb.Exists, Verb.Sink, Verb.Meta]) {
+    await concealed(space, issueAs(verb, VAULT, []));
+  }
+  assertStrictEquals(entered, 0);
+  assertStrictEquals(door.description().existenceSensitive, true);
+  assertStrictEquals(
+    text(await space.dispatch(issueAs(Verb.Source, VAULT, [READ]))),
+    "in",
+  );
+  assertStrictEquals(entered, 1);
+});
+
+Deno.test("public builders: family actions replace the flat sensitivity flag", async () => {
+  const entered: string[] = [];
+  const door = family(VAULT, { existenceSensitive: true })
+    .source({ requires: [READ] }, () => {
+      entered.push("Source");
+      return "in";
+    })
+    .sink({ requires: [WRITE], existenceSensitive: true }, () => {
+      entered.push("Sink");
+      return "in";
+    })
+    .exists({ requires: [READ], existenceSensitive: true }, () => {
+      entered.push("Exists");
+      return true;
+    })
+    .delete({ requires: [WRITE], existenceSensitive: false }, () => {
+      entered.push("Delete");
+      return "in";
+    });
+  const space = new Space([door], { stripAlias: false });
+  assertStrictEquals(door.description().existenceSensitive, true);
+  assertEquals(
+    door.description().actions.map((a) => a.existenceSensitive ?? false),
+    [false, true, true, false],
+  );
+  for (const verb of [Verb.Source, Verb.Delete]) {
+    denied(await space.dispatch(issueAs(verb, VAULT, [])));
+  }
+  for (const verb of [Verb.Sink, Verb.Exists, Verb.Meta]) {
+    await concealed(space, issueAs(verb, VAULT, []));
+  }
+  assertEquals(entered, []);
+  assertStrictEquals(
+    text(
+      await space.dispatch(
+        issueAs(Verb.Sink, VAULT, [WRITE], { content: "x" }),
+      ),
+    ),
+    "in",
+  );
+  assertEquals(entered, ["Sink"]);
+});
+
+Deno.test("public builders: a flat family flag conceals an undeclared verb", async () => {
+  const door = family(VAULT, { existenceSensitive: true })
+    .source({ requires: [READ] }, () => "in");
+  const space = new Space([door], { stripAlias: false });
+  denied(await space.dispatch(issueAs(Verb.Source, VAULT, [])));
+  await concealed(space, issueAs(Verb.Exists, VAULT, []));
+  await concealed(space, issueAs(Verb.Delete, VAULT, []));
+  await concealed(space, issueAs(Verb.Meta, VAULT, []));
+});
+
+Deno.test("public builders: Source and Delete can mark only their own action sensitive", async () => {
+  for (
+    const [method, verb] of [["source", Verb.Source], [
+      "delete",
+      Verb.Delete,
+    ]] as const
+  ) {
+    let entered = 0;
+    const door = family(VAULT)[method]({
+      requires: [READ],
+      existenceSensitive: true,
+    }, () => {
+      entered++;
+      return "in";
+    });
+    assertStrictEquals(door.description().existenceSensitive, false);
+    const space = new Space([door], { stripAlias: false });
+    await concealed(space, issueAs(verb, VAULT, []));
+    await concealed(space, issueAs(Verb.Meta, VAULT, []));
+    assertStrictEquals(entered, 0);
+    assertStrictEquals(
+      text(await space.dispatch(issueAs(verb, VAULT, [READ]))),
+      "in",
+    );
+    assertStrictEquals(entered, 1);
+  }
+});

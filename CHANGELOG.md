@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0 — public builders expose existence sensitivity (ledger #2892)
+
+- Add `existenceSensitive` to `EndpointOptions`, `FamilyOptions`, and
+  `ActionOptions` (including Source and Exists). The flag defaults to false and
+  reaches the description and each verb's contract. Explicit actions replace the
+  flat flag, as in core; mark each sensitive family verb itself.
+- Builder-made doors now conceal refused calls when marked, using the served
+  floor's existing rule. Regression tests compare refusals with an empty space's
+  miss and verify that concealed calls enter no handler.
+- Python's endpoint and per-verb family builders already expose
+  `existence_sensitive`; no matching gap was found. No package published.
+
 ## Unreleased — existence-sensitive doors conceal at the floor (core 0.2.2, ledger #2890)
 
 - **Security fix.** The served floor (`Space.dispatch`) answered `Denied` for a
