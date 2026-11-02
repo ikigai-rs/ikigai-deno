@@ -1302,6 +1302,8 @@ export interface EndpointOptions {
    * typed `Denied` before the handler runs (see {@linkcode Space.dispatch}).
    */
   requires?: string[];
+  /** Hide existence from callers refused by the capability floor; false by default. */
+  existenceSensitive?: boolean;
 }
 
 /** A served single-verb Source endpoint: a handler plus its self-description. */
@@ -1316,6 +1318,8 @@ export class EndpointDef extends ServedDef {
   readonly cacheable: boolean;
   /** The declared capability scopes, enforced at dispatch. */
   readonly requires: readonly string[];
+  /** Whether the capability floor conceals this door from refused callers. */
+  readonly existenceSensitive: boolean;
 
   /**
    * Prefer {@linkcode endpoint}, which takes the same values in reading
@@ -1333,6 +1337,7 @@ export class EndpointDef extends ServedDef {
     this.output = options.output ?? "text/plain;charset=utf-8";
     this.cacheable = options.cacheable ?? false;
     this.requires = [...(options.requires ?? [])];
+    this.existenceSensitive = options.existenceSensitive ?? false;
   }
 
   /**
@@ -1348,6 +1353,7 @@ export class EndpointDef extends ServedDef {
       inputs: [...this.bindings, ...this.args],
       outputs: [this.output],
       requires: this.requires,
+      existenceSensitive: this.existenceSensitive,
       actions: [],
     };
   }
@@ -1422,6 +1428,8 @@ export interface ActionOptions {
    * the door declares (an undeclared Exists, what Source needs).
    */
   requires?: string[];
+  /** Hide existence from callers refused by the capability floor; false by default. */
+  existenceSensitive?: boolean;
 }
 
 /** A Source may mark its answer a pure function of the door's state. */
@@ -1449,6 +1457,11 @@ export interface FamilyOptions {
   summary?: string;
   /** Descriptions of the template's variables. */
   bindings?: Record<string, BindingSpecInput>;
+  /**
+   * Mark the flat description sensitive; false by default. Explicit actions
+   * replace this flag, so mark each sensitive verb in its own options too.
+   */
+  existenceSensitive?: boolean;
 }
 
 interface ActionDef {
@@ -1457,6 +1470,7 @@ interface ActionDef {
   readonly args: readonly ArgSpec[];
   readonly output: string;
   readonly requires: readonly string[];
+  readonly existenceSensitive: boolean;
   readonly cacheable: boolean;
   readonly handler: Handler | null;
   readonly exists: ExistsHandler | null;
@@ -1496,6 +1510,8 @@ const VERB_ORDER = [Verb.Source, Verb.Sink, Verb.Exists, Verb.Delete];
  * ```
  */
 export class Family extends ServedDef {
+  /** The flat sensitivity flag; explicit actions carry their own flag. */
+  readonly existenceSensitive: boolean;
   readonly #actions = new Map<Verb, ActionDef>();
 
   /**
@@ -1504,6 +1520,7 @@ export class Family extends ServedDef {
    */
   constructor(pattern: string, options: FamilyOptions = {}) {
     super(pattern, options, defaultId(pattern));
+    this.existenceSensitive = options.existenceSensitive ?? false;
   }
 
   /** Declare the Source verb. */
@@ -1580,6 +1597,7 @@ export class Family extends ServedDef {
       args,
       output: options.output ?? "text/plain;charset=utf-8",
       requires: [...(options.requires ?? [])],
+      existenceSensitive: options.existenceSensitive ?? false,
       cacheable: cacheable ?? false,
       handler,
       exists: null,
@@ -1609,6 +1627,7 @@ export class Family extends ServedDef {
       inputs: [],
       outputs: [],
       requires: [],
+      existenceSensitive: this.existenceSensitive,
       actions: verbs.map((verb) => {
         const a = this.#actions.get(verb)!;
         return {
@@ -1617,6 +1636,7 @@ export class Family extends ServedDef {
           inputs: [...this.bindings, ...a.args],
           outputs: [a.output],
           requires: a.requires,
+          existenceSensitive: a.existenceSensitive,
         };
       }),
     };
