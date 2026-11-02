@@ -506,8 +506,22 @@ empty board, a won game, a drawn game, four refusals on the way and a hostile
 mark (`<b>"&'$a{…}`, written to the store through the host, escaped and never
 expanded), the app's `view/board`, `view/status` and every play's reply equal
 the Rust views' bytes over IPC, and the pages and their three static files equal
-`ttt-host`'s. (It skips when no `ttt-host` is found: `$TTT_HOST`,
-`~/.local/ttt-host/bin/ttt-host`, then `PATH`.)
+`ttt-host`'s.
+
+The parity test needs `ttt-host` built from the ikigai-tutorial commit that
+`.github/workflows/ci.yml` pins as `TTT_HOST_REV`; the `ikigai-cli` pin
+(`IKIGAI_CLI_VERSION`) does not cover it, because the test drives `ttt-host`,
+not `ikigai`. It looks at `$TTT_HOST`, then `~/.local/ttt-host/bin/ttt-host`,
+then `PATH`:
+
+```sh
+cargo install --git https://github.com/ikigai-rs/ikigai-tutorial \
+  --rev <TTT_HOST_REV> --locked ttt-host --root ~/.local/ttt-host
+```
+
+Locally it skips, saying so, when none is found. In CI it is required: the
+interop job builds that rev, and with `CI` set a missing `ttt-host` fails the
+test.
 
 The app also answers every page and view path the way `ttt-host` does, refusals
 included: the same status and the same body for a coordinate not in its plain

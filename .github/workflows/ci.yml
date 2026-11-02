@@ -42,16 +42,30 @@ jobs:
       - name: Test
         # Integration tests that need the `ikigai` binary skip themselves
         # when it is absent (CI has no Rust host; they run locally).
+        # TTT_HOST_OPTIONAL lets the tic-tac-toe parity test skip here as well,
+        # though `CI` is set: the interop job builds ttt-host and runs it.
+        env:
+          TTT_HOST_OPTIONAL: "the interop job runs the parity test"
         run: deno task test
 
   # The real Rust door. The `test` job skips every host-backed test (no binary);
   # this one builds the pinned ikigai-cli, cached by its version, puts it on PATH
   # and runs the same suite so the integration and IssueWith tests actually run.
   # Move IKIGAI_CLI_VERSION to follow the door.
+  #
+  # It also builds ikigai-tutorial's `ttt-host` for the tic-tac-toe parity test,
+  # which drives that binary, not the `ikigai` cli, so the cli pin does not cover
+  # it. Here the parity test is REQUIRED: with `CI` set it fails, rather than
+  # skips, when no ttt-host is found.
   interop:
     runs-on: ubuntu-latest
     env:
       IKIGAI_CLI_VERSION: "0.2.8"
+      # The ikigai-tutorial commit ttt-host is built from. It moves when the
+      # tutorial changes what ttt-host answers (its views, refusals or routes):
+      # move it to the tutorial's main, bring the parity test up to date in the
+      # same PR, and the cache below rebuilds for the new rev.
+      TTT_HOST_REV: "8c30fe704537c1a87ca384e6e5de1ab4443827d6"
     steps:
       - uses: actions/checkout@v4
       - uses: denoland/setup-deno@v2
@@ -67,8 +81,21 @@ jobs:
       - name: Build ikigai-cli
         if: steps.cli-cache.outputs.cache-hit != 'true'
         run: cargo install ikigai-cli --version "$IKIGAI_CLI_VERSION" --locked --root ~/ikigai-cli
+      - name: Cache ttt-host
+        id: ttt-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/ttt-host
+          key: ttt-host-${{ runner.os }}-${{ env.TTT_HOST_REV }}
+      - name: Build ttt-host
+        if: steps.ttt-cache.outputs.cache-hit != 'true'
+        run: >-
+          cargo install --git https://github.com/ikigai-rs/ikigai-tutorial
+          --rev "$TTT_HOST_REV" --locked ttt-host --root ~/ttt-host
       - name: Interop tests
         run: |
           export PATH="$HOME/ikigai-cli/bin:$PATH"
+          export TTT_HOST="$HOME/ttt-host/bin/ttt-host"
           ikigai --version
+          test -x "$TTT_HOST"
           deno task test
