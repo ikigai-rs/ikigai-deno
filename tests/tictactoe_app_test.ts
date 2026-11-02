@@ -442,6 +442,33 @@ Deno.test("ttt app: a path is decoded as ttt-host's edge decodes it", () => {
   assertThrows(() => pathSegments("/%E9"), PathError, "not UTF-8 once decoded");
 });
 
+Deno.test("ttt app: a page's game is a strict {id}, refusing a gen-delim", () => {
+  for (
+    const [path, delim] of [
+      ["/game/a%2Fb/", "/"],
+      ["/game/a:b", ":"],
+      ["/game/a%3Ab", ":"],
+      ["/game/a%3F", "?"],
+      ["/game/%23", "#"],
+      ["/game/[a]", "["],
+      ["/game/a@b", "@"],
+    ]
+  ) {
+    assertThrows(
+      () => route(path),
+      PathError,
+      `route variable {id} cannot carry '${delim}': a strict {var} refuses ` +
+        ": / ? # [ ] @",
+      path,
+    );
+  }
+  // Only the page's route is strict: a longer path takes the mechanical
+  // rule, where `a/iki` is no game and what follows no view.
+  assertEquals(route("/game/a%2Fiki/tutorial/ttt/view/board"), {
+    kind: "other",
+  });
+});
+
 Deno.test("ttt app: a path that is not an IRI is refused before anything resolves", () => {
   for (const ok of ["game:a:iki:tutorial:ttt:view:board", "a_b", "caf\u00e9"]) {
     assert(isIri(ok), ok);
@@ -1043,7 +1070,10 @@ Deno.test({
     };
     /**
      * A move the state refuses: the app answers 409 with `conflict: {msg}`;
-     * the Rust view reports the same text as its reply's message.
+     * the Rust view fails with the same Conflict, whose Display is that text.
+     * The view lets a Conflict through rather than answering it as a reply
+     * (ikigai-tutorial PR 138, ledger #585), so a refused play is a 409 at
+     * ttt-host's HTTP edge too; the edges below compare those answers.
      */
     const refused = async (x: number, y: number, expect: string) => {
       const response = await fetch(`${appUrl}/game/a/${views}/play/${x}/${y}`, {
@@ -1055,10 +1085,11 @@ Deno.test({
         [409, expect, "text/plain; charset=utf-8"],
         `refused ${x},${y}`,
       );
-      const theirs = (await client.sink(
-        `urn:game:b:iki:tutorial:ttt:view:play:${x}:${y}`,
-      )).text;
-      assert(theirs.startsWith(`${expect}. `), `host reply: ${theirs}`);
+      const theirs = await assertRejects(
+        () => client.sink(`urn:game:b:iki:tutorial:ttt:view:play:${x}:${y}`),
+        ConflictError,
+      );
+      assertStrictEquals(theirs.display(), expect, `host refusal ${x},${y}`);
       await same(`after refused ${x},${y}`);
     };
     const reset = async () => {
@@ -1077,10 +1108,12 @@ Deno.test({
       await play(1, 1, "X plays 1,1. O to play.");
       await play(0, 0, "O plays 0,0. X to play.");
       await refused(1, 1, "conflict: 1,1 is taken — X played there");
+      // Off the board names the coordinate that is off (`x` here), not the
+      // pair (ikigai-tutorial PR 138, ledger #585).
       await play(
         3,
         1,
-        "invalid argument `x, y`: 3,1 is off the board — no line passes " +
+        "invalid argument `x`: 3,1 is off the board — no line passes " +
           "through it. X to play.",
       );
       await play(2, 0, "X plays 2,0. O to play.");

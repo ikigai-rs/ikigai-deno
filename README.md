@@ -516,14 +516,16 @@ take (`405`, with the host's `Allow` list), `/game/a` with or without its
 trailing slash, the root game as `/game/root/`, a path that is not an IRI
 (`400 not a resource path`), and a malformed percent-escape or a segment that is
 not UTF-8 (`400`, decoded per segment as `ikigai-web` 0.1.30 does, so `%2F` is
-data and `+` is a `+`). The parity test asks both faces some seventy such
-requests and compares the answers. Two deliberate differences: a path that is
-not a view (`board`, `stored:…`, `template:…`) is `404 not found`, because the
-app serves views and is not a proxy for the host's raw resources; and a `PATCH`
-is always `415`, which the host also answers unless the body is a JSON
-merge-patch, a format the app does not model. The flags are the host's spelling,
-`--socket <path>` and `--http <addr>` (default `127.0.0.1:8071`; the host takes
-8070 and the Python face 8072, so all three run at once).
+data and `+` is a `+`), and a page's game that carries one of `: / ? # [ ] @`
+once decoded (`400`: the page route's `{id}` is strict). The parity test asks
+both faces some seventy such requests and compares the answers. Two deliberate
+differences: a path that is not a view (`board`, `stored:…`, `template:…`) is
+`404 not found`, because the app serves views and is not a proxy for the host's
+raw resources; and a `PATCH` is always `415`, which the host also answers unless
+the body is a JSON merge-patch, a format the app does not model. The flags are
+the host's spelling, `--socket <path>` and `--http <addr>` (default
+`127.0.0.1:8071`; the host takes 8070 and the Python face 8072, so all three run
+at once).
 
 Two honest limits. **Always write through the host**: the host cuts its cached
 reads when ITS kernel issues the write, so a mark written to the store directly
