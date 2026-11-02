@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — strict percent decoding (ikigai-fn 0.9.0, ledger #2838)
+
+- `percentDecode(text, plusIsSpace)` and
+  `percentDecodeBytes(data,
+  plusIsSpace)` in `./html`, ports of
+  `ikigai_fn::html::percent_decode` and `percent_decode_bytes`: `%XX` decoded
+  exactly once (either hex case), `+` a space only when asked, `%2B` always a
+  plus, every other byte passed through.
+- One error class, `PercentDecodeError`: `kind` is `malformed_escape` (with the
+  input BYTE `offset`, both forms) or `invalid_utf8` (the text form only); the
+  message is the Rust error's `Display`. A leading byte order mark is kept, as
+  Rust's `String::from_utf8` keeps it.
+- `tests/html_vectors.json` refreshed verbatim from ikigai-fn v0.9.0 (commit
+  c5c871a), adding the `percent_decode` section; every `url_segment` case is now
+  also a decode round trip in both plus modes.
+
 ## Unreleased — fixed inputs of a named request (core 0.2.7, ledger #2557)
 
 - Read `fixed` on an input (`ArgSpecInput.fixed`, `ArgSpec.fixed`; core's

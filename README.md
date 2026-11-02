@@ -55,9 +55,12 @@ import { connect, endpoint, serve } from "./src/mod.ts";
 
 `src/html.ts` (`@ikigai/wire/html`, zero dependencies) ports `ikigai_fn::html`:
 `htmlText`, `attr`, `urlSegment`, `safeHref` (the trimmed target, or `null` for
-"not a link") and `jsonAttr`. `tests/html_test.ts` runs every case of
-`tests/html_vectors.json`, a verbatim copy of ikigai-fn's
-`tests/vectors/html_vectors.json` at ikigai-fn commit 53d50c5 (ledger #1813).
+"not a link"), `jsonAttr`, and the strict decoders `percentDecode` (text, UTF-8
+checked) and `percentDecodeBytes`, which throw a `PercentDecodeError` whose
+`kind` is `malformed_escape` (with the input byte `offset`) or `invalid_utf8`.
+`tests/html_test.ts` runs every case of `tests/html_vectors.json`, a verbatim
+copy of ikigai-fn's `tests/vectors/html_vectors.json` at ikigai-fn 0.9.0 (ledger
+#1813, ledger #2838).
 
 ### Authorization headers and base64 (`./auth`)
 

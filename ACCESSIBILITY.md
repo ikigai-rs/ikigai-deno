@@ -25,7 +25,10 @@ The published library (`src/`):
   code and a fixed sentence that never holds the credential
   (`bearer-token-syntax: a bearer token must be a non-empty RFC 6750 b64token`);
   and the protocol, decode and template errors (`ProtocolError`, `DecodeError`
-  in `src/postcard.ts`, `TemplateError` in `src/template.ts`).
+  in `src/postcard.ts`, `TemplateError` in `src/template.ts`);
+  `PercentDecodeError` in `src/html.ts`, whose message is the Rust
+  `PercentDecodeError`'s `Display`
+  (`percent_decode: malformed percent-escape at byte 2`).
 - **A plain-text description.** A served endpoint's Meta face, asked for as
   `text/plain` (`descriptionText` in `src/serve.ts`): its id and title, its
   verbs, one line per input (`input name [source] (optional): summary`), and its
@@ -81,10 +84,11 @@ followed by reading; the tests below pin the rest.
   refusal vectors) pins the auth errors.
 - `tests/family_test.ts` (`flat endpoint over a template: …`) pins two input
   lines of the plain-text description.
-- `tests/html_test.ts` pins the escaping and link rules against
-  `tests/html_vectors.json`; `tests/tictactoe_app_test.ts` pins that the page
-  loads `conflict.js`, that it writes with `textContent` and never `innerHTML`,
-  that a hostile mark is escaped, and the sha256 of the vendored stylesheets.
+- `tests/html_test.ts` pins the escaping, link and percent-decoding rules
+  against `tests/html_vectors.json`, and the `PercentDecodeError` messages;
+  `tests/tictactoe_app_test.ts` pins that the page loads `conflict.js`, that it
+  writes with `textContent` and never `innerHTML`, that a hostile mark is
+  escaped, and the sha256 of the vendored stylesheets.
 - **No automated accessibility checker, browser or assistive technology has been
   used on this output.** No test pins the page shell's `lang`, `main` or `nav`,
   and the stylesheet's contrast is a comment, not a measurement made here.
