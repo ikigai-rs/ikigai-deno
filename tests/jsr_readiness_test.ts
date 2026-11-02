@@ -7,7 +7,8 @@
  *
  * 1. `deno publish --dry-run` (the `publish-check` task): the real publish
  *    validation without an upload. It fails on a TypeScript **slow type** in
- *    the exported API and on a missing license. A real `deno publish` is
+ *    the exported API and on a missing license (not on an unrecognized one:
+ *    JSR checks the `license` value only at a real publish). A real `deno publish` is
  *    refused by the publish fence; the dry run is allowed and never uploads.
  * 2. `deno doc --lint` over the exported entrypoints: the dry run does NOT
  *    score symbol documentation, so the missing-**doc** half is linted here
@@ -57,9 +58,13 @@ const EXPECTED_EXPORTS: Record<string, string> = {
 Deno.test("JSR: the manifest carries the publish fields", () => {
   assertMatch(manifest.name, /^@[a-z0-9-]+\/[a-z0-9-]+$/, "scoped name");
   assertMatch(manifest.version, /^\d+\.\d+\.\d+/, "SemVer version");
-  assertEquals(manifest.license, "MIT OR Apache-2.0");
-  // JSR refuses a publish with neither a license field nor a LICENSE file;
-  // the field above satisfies it, and both license texts ship beside it.
+  // JSR's `license` field takes ONE SPDX identifier from its list: the real
+  // publish refused the expression "MIT OR Apache-2.0" as `invalidLicense`
+  // (2026-11-02), a check made only on JSR's server, so the dry run above
+  // passed it. The package is still MIT OR Apache-2.0 at the user's option
+  // (README "License"); the field names MIT, which that option includes, and
+  // both license texts ship beside it.
+  assertEquals(manifest.license, "MIT");
   assert(
     ["LICENSE-MIT", "LICENSE-APACHE"].every((f) =>
       Deno.statSync(new URL(f, ROOT)).isFile

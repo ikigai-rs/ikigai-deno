@@ -1,7 +1,7 @@
 {
   "name": "@ikigai/deno",
   "version": "0.2.0",
-  "license": "MIT OR Apache-2.0",
+  "license": "MIT",
   "exports": {
     ".": "./src/mod.ts",
     "./wire": "./src/wire.ts",
