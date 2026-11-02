@@ -58,9 +58,15 @@ import { connect, endpoint, serve } from "./src/mod.ts";
 "not a link"), `jsonAttr`, and the strict decoders `percentDecode` (text, UTF-8
 checked) and `percentDecodeBytes`, which throw a `PercentDecodeError` whose
 `kind` is `malformed_escape` (with the input byte `offset`) or `invalid_utf8`.
-`tests/html_test.ts` runs every case of `tests/html_vectors.json`, a verbatim
-copy of ikigai-fn's `tests/vectors/html_vectors.json` at ikigai-fn 0.9.0 (ledger
-#1813, ledger #2838).
+`formPairs(text)` parses a complete form body or query into ordered name/value
+pairs, preserving duplicate and empty names. It splits at the first `=`, skips
+empty `&` fields, and decodes once with `+` as space. A malformed escape or
+invalid UTF-8 throws `FormPairsError`, with the same error `kind`, an `offset`
+in bytes in the original input, and the underlying `PercentDecodeError` as
+`source` and `cause`. A leading `?` is kept; decoded data still needs escaping
+for its use. `tests/html_test.ts` runs every case of `tests/html_vectors.json`,
+a verbatim copy of ikigai-fn's `tests/vectors/html_vectors.json` at commit
+aebf30a (PR 35; ledger #1813, ledger #2838, ledger #2883).
 
 ### Authorization headers and base64 (`./auth`)
 

@@ -28,7 +28,9 @@ The published library (`src/`):
   in `src/postcard.ts`, `TemplateError` in `src/template.ts`);
   `PercentDecodeError` in `src/html.ts`, whose message is the Rust
   `PercentDecodeError`'s `Display`
-  (`percent_decode: malformed percent-escape at byte 2`).
+  (`percent_decode: malformed percent-escape at byte 2`). `FormPairsError` in
+  the same module keeps Rust's form error message and the original input byte
+  offset (`form_pairs: decoded bytes are not UTF-8 at byte 2`).
 - **A plain-text description.** A served endpoint's Meta face, asked for as
   `text/plain` (`descriptionText` in `src/serve.ts`): its id and title, its
   verbs, one line per input (`input name [source] (optional): summary`), and its
@@ -84,11 +86,12 @@ followed by reading; the tests below pin the rest.
   refusal vectors) pins the auth errors.
 - `tests/family_test.ts` (`flat endpoint over a template: …`) pins two input
   lines of the plain-text description.
-- `tests/html_test.ts` pins the escaping, link and percent-decoding rules
-  against `tests/html_vectors.json`, and the `PercentDecodeError` messages;
-  `tests/tictactoe_app_test.ts` pins that the page loads `conflict.js`, that it
-  writes with `textContent` and never `innerHTML`, that a hostile mark is
-  escaped, and the sha256 of the vendored stylesheets.
+- `tests/html_test.ts` pins the escaping, link and percent-decoding rules and
+  form parsing against `tests/html_vectors.json`, and the `PercentDecodeError`
+  and `FormPairsError` messages; `tests/tictactoe_app_test.ts` pins that the
+  page loads `conflict.js`, that it writes with `textContent` and never
+  `innerHTML`, that a hostile mark is escaped, and the sha256 of the vendored
+  stylesheets.
 - **No automated accessibility checker, browser or assistive technology has been
   used on this output.** No test pins the page shell's `lang`, `main` or `nav`,
   and the stylesheet's contrast is a comment, not a measurement made here.

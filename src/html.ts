@@ -9,6 +9,7 @@
  * | a quoted attribute: `title="${…}"` or `title='${…}'` | {@link attr} |
  * | one path segment or query value: `/item/${…}?q=${…}` | {@link urlSegment} |
  * | reading one back: a segment or (`plusIsSpace`) a form value | {@link percentDecode}, {@link percentDecodeBytes} |
+ * | a complete form body or query | {@link formPairs} |
  * | a whole link target from data: `href="${…}"` | {@link safeHref}, then {@link attr} |
  * | htmx's `hx-vals='${…}'` | {@link jsonAttr} |
  *
@@ -186,6 +187,127 @@ export function percentDecode(text: string, plusIsSpace: boolean): string {
   } catch (cause) {
     throw new PercentDecodeError("invalid_utf8", undefined, { cause });
   }
+}
+
+/** A refused form component, with its byte offset in the original input. */
+export class FormPairsError extends Error {
+  /** The zero-based source byte that starts the malformed escape or UTF-8 sequence. */
+  readonly offset: number;
+  /** Why the component could not be decoded. */
+  readonly kind: PercentDecodeErrorKind;
+  /** The decoding failure; a malformed-escape offset here is component-relative. */
+  readonly source: PercentDecodeError;
+
+  /** Wrap a component decoding failure at its position in the complete input. */
+  constructor(offset: number, source: PercentDecodeError) {
+    const reason = source.kind === "malformed_escape"
+      ? "malformed percent-escape"
+      : "decoded bytes are not UTF-8";
+    super(`form_pairs: ${reason} at byte ${offset}`, { cause: source });
+    this.name = "FormPairsError";
+    this.offset = offset;
+    this.kind = source.kind;
+    this.source = source;
+  }
+}
+
+/** Locate the first invalid UTF-8 sequence, as Rust's valid_up_to does. */
+function invalidUtf8Offset(bytes: Uint8Array): number {
+  let i = 0;
+  while (i < bytes.length) {
+    const lead = bytes[i];
+    if (lead < 0x80) {
+      i++;
+      continue;
+    }
+    const width = lead >= 0xC2 && lead <= 0xDF
+      ? 2
+      : lead >= 0xE0 && lead <= 0xEF
+      ? 3
+      : lead >= 0xF0 && lead <= 0xF4
+      ? 4
+      : 0;
+    if (width === 0 || i + width > bytes.length) return i;
+    for (let j = 1; j < width; j++) {
+      const byte = bytes[i + j];
+      const min = j === 1 && lead === 0xE0
+        ? 0xA0
+        : j === 1 && lead === 0xF0
+        ? 0x90
+        : 0x80;
+      const max = j === 1 && lead === 0xED
+        ? 0x9F
+        : j === 1 && lead === 0xF4
+        ? 0x8F
+        : 0xBF;
+      if (byte < min || byte > max) return i;
+    }
+    i += width;
+  }
+  return i;
+}
+
+/**
+ * Parse an `application/x-www-form-urlencoded` body or query into ordered pairs.
+ * Skip empty `&` fields and split each remaining field at its first `=`; a
+ * missing value is empty. Keep duplicate and empty names. Decode each component
+ * once with `+` as space; encoded delimiters remain data. No leading `?` is
+ * stripped. Decoded data still needs escaping or link validation for its use.
+ *
+ * @throws {FormPairsError} On a malformed escape or invalid UTF-8, with a byte
+ * offset in the ORIGINAL input. Fields are checked in order, name before value;
+ * malformed escapes take precedence over invalid UTF-8 within each component.
+ * No partial pairs are returned.
+ *
+ * ```ts
+ * import { formPairs } from "@ikigai/wire/html";
+ * import { assertEquals } from "@std/assert";
+ * assertEquals(formPairs("tag=c%2B%2B&tag=rust+lang&flag"), [
+ *   ["tag", "c++"], ["tag", "rust lang"], ["flag", ""],
+ * ]);
+ * ```
+ */
+export function formPairs(text: string): Array<[string, string]> {
+  const input = new TextEncoder().encode(text);
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  function component(start: number, end: number): string {
+    const raw = input.subarray(start, end);
+    let decoded: Uint8Array;
+    try {
+      decoded = percentDecodeBytes(raw, true);
+    } catch (source) {
+      if (!(source instanceof PercentDecodeError)) throw source;
+      throw new FormPairsError(start + source.offset!, source);
+    }
+    try {
+      return decoder.decode(decoded);
+    } catch (cause) {
+      const invalid = invalidUtf8Offset(decoded);
+      let original = 0;
+      for (let i = 0; i < invalid; i++) {
+        original += raw[original] === 0x25 ? 3 : 1;
+      }
+      throw new FormPairsError(
+        start + original,
+        new PercentDecodeError("invalid_utf8", undefined, { cause }),
+      );
+    }
+  }
+  const pairs: Array<[string, string]> = [];
+  let start = 0;
+  for (let end = 0; end <= input.length; end++) {
+    if (end !== input.length && input[end] !== 0x26) continue;
+    if (end > start) {
+      let equals = start;
+      while (equals < end && input[equals] !== 0x3D) equals++;
+      pairs.push([
+        component(start, equals),
+        component(equals < end ? equals + 1 : end, end),
+      ]);
+    }
+    start = end + 1;
+  }
+  return pairs;
 }
 
 /**
