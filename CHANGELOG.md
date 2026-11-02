@@ -2,6 +2,9 @@
 
 ## 0.2.0 — public builders expose existence sensitivity (ledger #2892)
 
+- The JSR `license` field is `MIT`: JSR accepts one SPDX identifier and refused
+  the expression `MIT OR Apache-2.0` at publish. The package stays MIT OR
+  Apache-2.0 at your option, and both license texts ship in it.
 - The JSR package is named `@ikigai/deno` (it was `@ikigai/wire` in the
   manifest; it has never been published under either name). The repository is
   `ikigai-deno` and the scope already says `ikigai`.
