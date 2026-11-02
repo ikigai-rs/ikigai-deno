@@ -2,7 +2,7 @@
  * `src/html.ts` pinned by the shared HTML vectors (ledger #1813).
  *
  * `html_vectors.json` is a VERBATIM copy of ikigai-fn's
- * `tests/vectors/html_vectors.json` at ikigai-fn v0.9.0 (commit c5c871a, PR 33); do
+ * `tests/vectors/html_vectors.json` at ikigai-fn main (commit 6db95f0, PR 34); do
  * not edit or reformat it here (`deno.json` keeps it out of `deno fmt`, and
  * `.gitattributes` keeps it LF): to pick up new vectors, copy the file again.
  * Every case runs; an unknown section or a changed case fails.
