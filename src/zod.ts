@@ -49,7 +49,7 @@
  * alone, resolved only when it is imported by path, and its signatures name
  * zod's own types — which `deno doc --lint` reports as `private-type-ref`.
  * That keeps it out of the published API permanently (the decision on that
- * item): there is no `@ikigai/wire/zod`, and this file is imported by path
+ * item): there is no `@ikigai/deno/zod`, and this file is imported by path
  * (`./src/zod.ts`). `src/` without it never resolves zod, for consumers who
  * declare `args:` explicitly.
  *

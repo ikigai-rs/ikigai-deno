@@ -1,5 +1,5 @@
 {
-  "name": "@ikigai/wire",
+  "name": "@ikigai/deno",
   "version": "0.2.0",
   "license": "MIT OR Apache-2.0",
   "exports": {

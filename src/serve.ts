@@ -7,7 +7,7 @@
  * their declared ArgSpecs, invoked over the wire:
  *
  * ```ts
- * import { endpoint, serve } from "@ikigai/wire/serve";
+ * import { endpoint, serve } from "@ikigai/deno/serve";
  *
  * const hello = endpoint("urn:ts:hello", {
  *   summary: "Greet someone",
@@ -25,7 +25,7 @@
  * each with its own contract ({@linkcode family}):
  *
  * ```ts
- * import { family } from "@ikigai/wire/serve";
+ * import { family } from "@ikigai/deno/serve";
  *
  * const marks = new Map<string, string>();
  * const cell = family("urn:ts:stored:{x}:{y}", { id: "stored" })
@@ -1496,7 +1496,7 @@ const VERB_ORDER = [Verb.Source, Verb.Sink, Verb.Exists, Verb.Delete];
  * - Any verb not declared is a typed refusal naming the ones that are.
  *
  * ```ts
- * import { family } from "@ikigai/wire/serve";
+ * import { family } from "@ikigai/deno/serve";
  *
  * // Stand-ins for your own storage.
  * declare function read(...cell: unknown[]): string;

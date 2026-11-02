@@ -4,7 +4,7 @@
  * The front door for scripts and Deno programs:
  *
  * ```ts
- * import { connect } from "@ikigai/wire/client";
+ * import { connect } from "@ikigai/deno/client";
  *
  * await using k = await connect();
  * const rep = await k.source("urn:iki:fn:toUpper", { in: "hi" });

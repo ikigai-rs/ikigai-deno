@@ -2,6 +2,9 @@
 
 ## 0.2.0 — public builders expose existence sensitivity (ledger #2892)
 
+- The JSR package is named `@ikigai/deno` (it was `@ikigai/wire` in the
+  manifest; it has never been published under either name). The repository is
+  `ikigai-deno` and the scope already says `ikigai`.
 - Add `existenceSensitive` to `EndpointOptions`, `FamilyOptions`, and
   `ActionOptions` (including Source and Exists). The flag defaults to false and
   reaches the description and each verb's contract. Explicit actions replace the
