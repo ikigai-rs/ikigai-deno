@@ -53,7 +53,7 @@ import { connect, endpoint, serve } from "./src/mod.ts";
 
 ### HTML escaping and URL rules (`./html`)
 
-`src/html.ts` (`@ikigai/wire/html`, zero dependencies) ports `ikigai_fn::html`:
+`src/html.ts` (`@ikigai/deno/html`, zero dependencies) ports `ikigai_fn::html`:
 `htmlText`, `attr`, `urlSegment`, `safeHref` (the trimmed target, or `null` for
 "not a link"), `jsonAttr`, and the strict decoders `percentDecode` (text, UTF-8
 checked) and `percentDecodeBytes`, which throw a `PercentDecodeError` whose
@@ -70,7 +70,7 @@ aebf30a (PR 35; ledger #1813, ledger #2838, ledger #2883).
 
 ### Authorization headers and base64 (`./auth`)
 
-`src/auth.ts` (`@ikigai/wire/auth`, zero dependencies) ports `ikigai_http::auth`
+`src/auth.ts` (`@ikigai/deno/auth`, zero dependencies) ports `ikigai_http::auth`
 and `ikigai_http::base64`: `basicAuthorization` (RFC 7617),
 `bearerAuthorization` (RFC 6750), `parseAuthorization`, `base64Encode` and
 `base64Decode` (padding required, canonical pad bits). A refusal throws an
@@ -85,7 +85,7 @@ The published surface is exactly six entrypoints — `.` (`src/mod.ts`), `./wire
 `./client`, `./serve`, `./html` and `./auth`. **`./zod` is left out of `exports`
 for good** (decided in ledger #1350): its signatures name zod's own types, which
 `deno doc --lint` reports as `private-type-ref`, so it is not part of the
-published API and no `@ikigai/wire/zod` specifier will be offered. The file
+published API and no `@ikigai/deno/zod` specifier will be offered. The file
 stays in the tree and is importable **by path** (`./src/zod.ts`), so the
 `zod → ArgSpec` rung below keeps working.
 
@@ -169,7 +169,7 @@ rather than a failure.
 ## Client (the script front door)
 
 ```ts
-import { connect } from "@ikigai/wire";
+import { connect } from "@ikigai/deno";
 
 await using k = await connect(); // default socket path, same as the Rust CLI
 const rep = await k.source("urn:iki:fn:toUpper", { in: "hi" });
@@ -225,7 +225,7 @@ Notes:
 ## Serve (the peer-module seed)
 
 ```ts
-import { endpoint, serve } from "@ikigai/wire";
+import { endpoint, serve } from "@ikigai/deno";
 
 const hello = endpoint("urn:ts:hello", {
   summary: "Greet someone",
@@ -352,7 +352,7 @@ matches, and each `{variable}` reaches the handler by name, beside the
 arguments:
 
 ```ts
-import { endpoint } from "@ikigai/wire";
+import { endpoint } from "@ikigai/deno";
 
 const echo = endpoint("urn:ts:echo:{msg}", {
   bindings: { msg: { summary: "what to say" } },
@@ -363,7 +363,7 @@ const echo = endpoint("urn:ts:echo:{msg}", {
 `ActionSpec`. `family()` returns a builder; chain the verbs it answers:
 
 ```ts
-import { family, NotFoundError } from "@ikigai/wire";
+import { family, NotFoundError } from "@ikigai/deno";
 
 const marks = new Map<string, string>();
 const cell = family("urn:ts:stored:{x}:{y}", { id: "stored" })

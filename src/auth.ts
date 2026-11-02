@@ -56,7 +56,7 @@ const DECODE = new Map<string, number>(
  * `bytes` as standard-alphabet (RFC 4648 section 4) base64 with `=` padding.
  *
  * ```ts
- * import { base64Encode } from "@ikigai/wire/auth";
+ * import { base64Encode } from "@ikigai/deno/auth";
  * import { assertEquals } from "@std/assert";
  * assertEquals(base64Encode(new TextEncoder().encode("foob")), "Zm9vYg==");
  * ```
@@ -81,7 +81,7 @@ export function base64Encode(bytes: Uint8Array): string {
  * @throws {AuthError} `base64-invalid`
  *
  * ```ts
- * import { base64Decode } from "@ikigai/wire/auth";
+ * import { base64Decode } from "@ikigai/deno/auth";
  * import { assertEquals } from "@std/assert";
  * assertEquals(new TextDecoder().decode(base64Decode("Zm9vYg==")), "foob");
  * ```
@@ -124,7 +124,7 @@ const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
  * `basic-password-control`
  *
  * ```ts
- * import { basicAuthorization } from "@ikigai/wire/auth";
+ * import { basicAuthorization } from "@ikigai/deno/auth";
  * import { assertEquals } from "@std/assert";
  * assertEquals(basicAuthorization("Aladdin", "open sesame"), "Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==");
  * ```
@@ -144,7 +144,7 @@ export function basicAuthorization(user: string, password: string): string {
  * @throws {AuthError} `bearer-token-syntax`
  *
  * ```ts
- * import { bearerAuthorization } from "@ikigai/wire/auth";
+ * import { bearerAuthorization } from "@ikigai/deno/auth";
  * import { assertEquals } from "@std/assert";
  * assertEquals(bearerAuthorization("mF_9.B5f-4.1JqM"), "Bearer mF_9.B5f-4.1JqM");
  * ```
@@ -175,7 +175,7 @@ const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+/;
  * The credentials are not checked here.
  *
  * ```ts
- * import { parseAuthorization } from "@ikigai/wire/auth";
+ * import { parseAuthorization } from "@ikigai/deno/auth";
  * import { assertEquals } from "@std/assert";
  * assertEquals(parseAuthorization("BEARER abc"), { scheme: "bearer", name: "Bearer", credentials: "abc" });
  * ```
