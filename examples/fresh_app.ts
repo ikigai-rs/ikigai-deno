@@ -54,7 +54,7 @@ function html(vnode: VNode, init: ResponseInit = {}): Response {
 function page(title: string, ...children: VNode[]): Response {
   const doc = h(
     "html",
-    null,
+    { lang: "en" },
     h(
       "head",
       null,
@@ -62,7 +62,7 @@ function page(title: string, ...children: VNode[]): Response {
       h("title", null, title),
       h("script", { src: HTMX }),
     ),
-    h("body", null, h("h1", null, title), ...children),
+    h("body", null, h("main", null, h("h1", null, title), ...children)),
   );
   return new Response("<!doctype html>" + renderToString(doc), {
     headers: { "Content-Type": "text/html; charset=utf-8" },
@@ -85,6 +85,7 @@ function demoForm(
   field: string,
   target: string,
 ): VNode {
+  const inputId = `${target}-input`;
   return h(
     "div",
     null,
@@ -92,10 +93,16 @@ function demoForm(
     h(
       "form",
       { action, "hx-get": action, "hx-target": `#${target}` },
-      h("input", { name: field, placeholder: field, required: true }),
+      h("label", { for: inputId }, field),
+      h("input", {
+        id: inputId,
+        name: field,
+        placeholder: field,
+        required: true,
+      }),
       h("button", null, "Resolve"),
     ),
-    h("div", { id: target }),
+    h("div", { id: target, "aria-live": "polite" }),
   );
 }
 
