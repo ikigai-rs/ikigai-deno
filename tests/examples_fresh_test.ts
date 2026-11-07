@@ -36,6 +36,43 @@ Deno.test("fresh: the index page offers a form per endpoint", async () => {
   });
 });
 
+Deno.test("fresh: pages have a language and main landmark", async () => {
+  await withApp(makeApp, async ({ handler }) => {
+    for (const path of ["/", "/catalog"]) {
+      const body = await (await get(handler, path)).text();
+      assert(body.includes('<html lang="en">'), `${path}: no language`);
+      assertStrictEquals((body.match(/<main>/g) ?? []).length, 1);
+      assert(
+        /<main><h1>.*<\/main>/.test(body),
+        `${path}: content outside main`,
+      );
+    }
+  });
+});
+
+Deno.test("fresh: each form has a labeled input and a polite live result", async () => {
+  await withApp(makeApp, async ({ handler }) => {
+    const body = await (await get(handler, "/")).text();
+    assertStrictEquals((body.match(/<input\b/g) ?? []).length, 3);
+    for (
+      const [name, field] of [["hello", "who"], ["upper", "text"], [
+        "reverse",
+        "text",
+      ]]
+    ) {
+      const id = `${name}-out-input`;
+      assert(body.includes(`<label for="${id}">${field}</label>`));
+      assert(body.includes(`<input id="${id}" name="${field}"`));
+      assert(body.includes(`hx-target="#${name}-out"`));
+      assert(body.includes(`<div id="${name}-out" aria-live="polite"></div>`));
+      assertStrictEquals(
+        (body.match(new RegExp(`id="${id}"`, "g")) ?? []).length,
+        1,
+      );
+    }
+  });
+});
+
 Deno.test("fresh: a form route returns a fragment with the cache verdict", async () => {
   await withApp(makeApp, async ({ handler }) => {
     const res = await get(handler, "/upper?text=abc");

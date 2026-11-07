@@ -12,7 +12,7 @@ conformance claim. Adapted from the
 | Status           | Evaluation in progress. No conformance claim.                                                                                                                                                                                                                      |
 | Owner            | the maintainers of this repository                                                                                                                                                                                                                                 |
 | Report a barrier | [a GitHub issue](https://github.com/ikigai-rs/ikigai-deno/issues/new?labels=accessibility) with the `accessibility` label; anything security-sensitive through [private vulnerability reporting](https://github.com/ikigai-rs/ikigai-deno/security/advisories/new) |
-| Last reviewed    | 2026-10-31                                                                                                                                                                                                                                                         |
+| Last reviewed    | 2026-11-07                                                                                                                                                                                                                                                         |
 
 ## What it emits that people read
 
@@ -69,10 +69,14 @@ sends, which this package carries unchanged.
 - **A refused move is announced as text.** `conflict.js` writes the `409` answer
   into the status region with `textContent`, never as HTML, and the board is
   left as it was.
+- **The Fresh example's pages** have `<html lang="en">` and one `<main>` holding
+  the heading and content. Every form input has a visible `<label>` associated
+  with its unique id; each result target has `aria-live="polite"` so updates can
+  be announced without moving focus.
 - **No color is written** anywhere in the library or the console line.
 
-The page shell's `lang`, `main` and `nav` and the stylesheet's contrast are
-followed by reading; the tests below pin the rest.
+The tic-tac-toe page shell's `lang`, `main` and `nav` and the stylesheet's
+contrast are followed by reading; the tests below pin the rest.
 
 ## How it is tested
 
@@ -92,19 +96,19 @@ followed by reading; the tests below pin the rest.
   page loads `conflict.js`, that it writes with `textContent` and never
   `innerHTML`, that a hostile mark is escaped, and the sha256 of the vendored
   stylesheets.
+- `tests/examples_fresh_test.ts` pins the language and main landmark on the
+  index and catalog pages, each input's visible label and unique id, and the
+  polite live region for each form's result target.
 - **No automated accessibility checker, browser or assistive technology has been
-  used on this output.** No test pins the page shell's `lang`, `main` or `nav`,
-  and the stylesheet's contrast is a comment, not a measurement made here.
+  used on this output.** No test pins the tic-tac-toe page shell's `lang`,
+  `main` or `nav`, and the stylesheet's contrast is a comment, not a measurement
+  made here.
 
 ## Known limitations
 
 Found by reading the source on 2026-10-31, not by testing with people or
 assistive technology:
 
-- The Fresh example's page (`examples/fresh_app.ts`) has no `lang` and no
-  `main`; its inputs are named only by a `placeholder`, with no `<label>`; and
-  the region a result is swapped into is not a live region, so a screen reader
-  is not told a result arrived.
 - Decode and protocol errors are fragments that do not say what to do
   (`varint too long`, `invalid Option tag 0x…`, `unexpected reply to …`); they
   are meant for implementors, but they reach whoever calls the client.
@@ -131,6 +135,7 @@ sharing them. Anything security-sensitive goes through
 
 ## Change history
 
-| Date       | Change         |
-| ---------- | -------------- |
-| 2026-10-31 | First version. |
+| Date       | Change                                                                                          |
+| ---------- | ----------------------------------------------------------------------------------------------- |
+| 2026-10-31 | First version.                                                                                  |
+| 2026-11-07 | Added Fresh page landmarks, input labels and polite live result regions, with regression tests. |
