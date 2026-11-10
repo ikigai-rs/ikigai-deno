@@ -34,6 +34,9 @@ import {
   type ActionSpecModel,
   ArgSpec,
   type DescriptionModel,
+  endpoint,
+  family,
+  resendSafe,
 } from "../src/serve.ts";
 import {
   CONTRACT_PREFIX,
@@ -118,7 +121,30 @@ Deno.test("each vector description survives this test's adapter unchanged", () =
   for (const door of VECTORS.doors) {
     assertEquals(
       new VectorDoor(door.description).descriptionJson(),
-      door.description,
+      {
+        ...door.description,
+        // Serde accepts a missing source as argument; the new core/resend
+        // fixture uses that spelling. This face emits the explicit default.
+        inputs: (door.description["inputs"] as Json[]).map((i) => ({
+          source: "argument",
+          ...i,
+        })),
+        ...("actions" in door.description
+          ? {
+            actions: (door.description["actions"] as Json[]).map((a) => ({
+              ...a,
+              ...("inputs" in a
+                ? {
+                  inputs: (a["inputs"] as Json[]).map((i) => ({
+                    source: "argument",
+                    ...i,
+                  })),
+                }
+                : {}),
+            })),
+          }
+          : {}),
+      },
       door.name,
     );
   }
@@ -422,4 +448,62 @@ Deno.test("body-reader declarations survive ArgSpec copies, including explicit f
       ...(readsBody === undefined ? {} : { reads_body: readsBody }),
     });
   }
+});
+
+Deno.test("resend safety requires an explicit declaration, never a verb guess", () => {
+  for (const verb of [Verb.Source, Verb.Sink, Verb.Delete, Verb.Exists]) {
+    const old = actionSpec({ verb: Verb[verb] });
+    assertStrictEquals(resendSafe(old, { key: "present" }), false);
+    assertStrictEquals(
+      resendSafe({ ...old, resend: null }, { key: "present" }),
+      false,
+    );
+    assertStrictEquals(
+      contractId("old", old),
+      contractId("old", { ...old, resend: null }),
+    );
+  }
+  assertStrictEquals(resendSafe({ resend: "safe" }), true);
+  assertStrictEquals(resendSafe({ resend: { key: "key" } }), false);
+  assertStrictEquals(
+    resendSafe({ resend: { key: "key" } }, { other: "x" }),
+    false,
+  );
+  assertStrictEquals(
+    resendSafe({ resend: { key: "key" } }, { key: "x" }),
+    true,
+  );
+  assertStrictEquals(resendSafe({ resend: { key: "toString" } }, {}), false);
+});
+
+Deno.test("public doors carry resend declarations through JSON, digests, and Turtle", () => {
+  const plain = endpoint("urn:append", { args: ["key"] }, () => "");
+  const keyed = endpoint("urn:append", {
+    args: ["key"],
+    resend: { key: "key" },
+  }, () => "");
+  assertEquals((keyed.descriptionJson()["actions"] as Json[])[0]["resend"], {
+    key: "key",
+  });
+  assertNotEquals(keyed.descriptionTurtle(), plain.descriptionTurtle());
+  const spec = actionSpec({
+    verb: "Source",
+    inputs: [{ name: "key", required: true }],
+    outputs: ["text/plain;charset=utf-8"],
+    resend: { key: "key" },
+  });
+  assert(
+    keyed.descriptionTurtle().includes(
+      `ik:resendKey <${contractIri("append", spec)}:input:key>`,
+    ),
+  );
+  const verbs = family("urn:verbs")
+    .source(() => "")
+    .sink({ args: ["key"], resend: { key: "key" } }, () => "")
+    .delete({ resend: "safe" }, () => "");
+  const actions = verbs.descriptionJson()["actions"] as Json[];
+  assertStrictEquals("resend" in actions[0], false);
+  assertEquals(actions[1]["resend"], { key: "key" });
+  assertStrictEquals(actions[2]["resend"], "safe");
+  assert(verbs.descriptionTurtle().includes("ik:resendSafe true"));
 });

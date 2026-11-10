@@ -12,6 +12,7 @@
 tests/contract_vectors.json  text eol=lf
 tests/contract_cases.json text eol=lf
 tests/failure_class_vectors.json text eol=lf
+tests/failure_class_cases.json text eol=lf
 tests/capability_vectors.json text eol=lf
 tests/validation_vectors.json text eol=lf
 tests/html_vectors.json text eol=lf

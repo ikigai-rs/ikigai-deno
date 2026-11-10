@@ -42,7 +42,7 @@
  *
  * **v9 is backward compatible with v7 and v8 the same way.** It appends
  * `Call::IssueWith` (variant 5; see {@linkcode IssueWith}) and sends the
- * failure classes (tags 9-13) to a peer that negotiated 9; an older peer gets
+ * failure classes (tags 9-14) to a peer that negotiated 9; an older peer gets
  * them as `Endpoint(display)`. A client sends `IssueWith` only to a v9 peer,
  * and only when its run carries a retry budget or a deadline. The deadline
  * crosses as TIME LEFT in whole ms, never an absolute instant.
@@ -63,13 +63,13 @@ import { isAbsoluteIri } from "./iri.ts";
  * {@linkcode MIN_PROTOCOL_VERSION}. v9 appends `Call::IssueWith` (variant 5:
  * an optional trace context, retry budget and TIME LEFT in whole ms — never an
  * absolute instant; a server adds it to its OWN clock) and sends failure tags
- * 9-13 to peers that negotiated 9.
+ * 9-14 to peers that negotiated 9.
  */
 export const PROTOCOL_VERSION = 9;
 
 /**
  * The first wire version that carries `Call::IssueWith` (variant 5) and the
- * failure classes 9-13. Below it, a call never carries a retry budget or a
+ * failure classes 9-14. Below it, a call never carries a retry budget or a
  * deadline and a failure of those classes crosses as `Endpoint(display)`.
  */
 export const ISSUE_WITH_SINCE_VERSION = 9;
@@ -153,7 +153,7 @@ export class ProtocolError extends WireError {}
  * `Reply::Error` string.
  *
  * `transient` mirrors `ikigai_core::Error::is_transient()`: `true` only for
- * {@linkcode TimeoutError} and {@linkcode UnavailableError} — re-issuing
+ * {@linkcode TimeoutError} and {@linkcode UnavailableError} and {@linkcode GaveUpError} — re-issuing
  * might succeed. Permanent failures (denied, not found, bad arguments, a
  * state conflict) stay `false`: retrying will not conjure the resource or
  * the grant, nor change the state that refused.
@@ -162,7 +162,7 @@ export class EndpointError extends WireError {
   /**
    * Whether re-issuing the same request might succeed — `false` here and on
    * every permanent subclass; only {@linkcode TimeoutError} and
-   * {@linkcode UnavailableError} override it to `true`.
+   * {@linkcode UnavailableError} and {@linkcode GaveUpError} override it to `true`.
    */
   readonly transient: boolean = false;
 
@@ -615,6 +615,89 @@ export class UnsupportedError extends EndpointError {
   /** The kind word: `unsupported`. */
   override kind(): string {
     return "unsupported";
+  }
+}
+
+/** A retry overlay stopped after exhausting its budget or deadline (core 0.3.5). */
+export class GaveUpError extends EndpointError {
+  /** Always transient, even though this retry run has stopped. */
+  override readonly transient: boolean = true;
+
+  /** Counts and elapsed time are whole, nonnegative integers; elapsed is in milliseconds. */
+  constructor(
+    /** How many attempts the overlay issued (a u32). */
+    readonly attempts: number,
+    /** Time spent in whole milliseconds, rounded down. */
+    readonly elapsedMs: number,
+    detail: string,
+  ) {
+    super(detail);
+    if (
+      !Number.isInteger(attempts) || attempts < 0 || attempts > 0xffffffff ||
+      !Number.isSafeInteger(elapsedMs) || elapsedMs < 0
+    ) {
+      throw new TypeError(
+        "gave-up counts must be nonnegative integers in range",
+      );
+    }
+  }
+
+  /** The stable error kind. */
+  override kind(): string {
+    return "gave-up";
+  }
+
+  /** The failure class: transient. */
+  override class(): FailureClass {
+    return "transient";
+  }
+
+  /** Core's Display, including the singular form for one attempt. */
+  override display(): string {
+    return `gave up after ${this.attempts} ${
+      this.attempts === 1 ? "attempt" : "attempts"
+    } over ${this.elapsedMs} ms: ${this.message}`;
+  }
+
+  /** Core's JSON error face, with time spent in milliseconds. */
+  toJson(): Record<string, unknown> {
+    return {
+      kind: this.kind(),
+      attempts: this.attempts,
+      elapsed_ms: this.elapsedMs,
+      detail: this.message,
+    };
+  }
+
+  /** Read a gave-up JSON face, refusing missing or malformed counts. */
+  static fromJson(value: unknown): GaveUpError {
+    if (typeof value !== "object" || value === null) {
+      throw new TypeError("gave-up error must be an object");
+    }
+    const json = value as Record<string, unknown>;
+    if (
+      json.kind !== "gave-up" || typeof json.attempts !== "number" ||
+      typeof json.elapsed_ms !== "number" || typeof json.detail !== "string"
+    ) {
+      throw new TypeError(
+        "gave-up error requires attempts, elapsed_ms, and detail",
+      );
+    }
+    return new GaveUpError(json.attempts, json.elapsed_ms, json.detail);
+  }
+
+  /** Core's Turtle failure description, including machine-readable counts. */
+  toTurtle(): string {
+    const message = this.display().replaceAll("\\", "\\\\")
+      .replaceAll('"', '\\"').replaceAll("\n", "\\n")
+      .replaceAll("\r", "\\r").replaceAll("\t", "\\t");
+    return "@prefix ik: <https://ikigai-rs.dev/ns#> .\n" +
+      "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\n" +
+      '[] a ik:Failure ;\n    ik:failureKind "gave-up" ;\n    ' +
+      "ik:failureClass ik:TransientFailure ;\n    " +
+      `ik:failureMessage "${message}" ;\n    ` +
+      `ik:attempts "${this.attempts}"^^xsd:nonNegativeInteger ;\n    ` +
+      `ik:elapsedMillis "${this.elapsedMs}"^^xsd:nonNegativeInteger .\n`;
   }
 }
 
@@ -1194,8 +1277,8 @@ export interface IssueWith {
  * unresolved=0, missingArgument=1, invalidArgument=2, endpoint=3, denied=4,
  * notFound=5, timeout=6, unavailable=7, conflict=8 (v8), then the failure
  * classes of core 0.1.108: depthExceeded=9, retryAfter=10, overBudget=11,
- * refused=12, unsupported=13. This side only RECEIVES 9-13 (it decodes them);
- * it never sends them, and negotiates no version for them.
+ * refused=12, unsupported=13, gaveUp=14. Tags 9-14 require wire v9;
+ * older peers receive Endpoint(display).
  */
 export type WireFailure =
   | { readonly kind: "unresolved"; readonly iri: string }
@@ -1223,6 +1306,12 @@ export type WireFailure =
   }
   | { readonly kind: "overBudget"; readonly detail: string }
   | { readonly kind: "refused"; readonly message: string }
+  | {
+    readonly kind: "gaveUp";
+    readonly attempts: number;
+    readonly elapsedMs: number;
+    readonly detail: string;
+  }
   | {
     readonly kind: "unsupported";
     readonly verb: Verb | null;
@@ -1274,6 +1363,12 @@ export function typedError(failure: WireFailure): EndpointError {
       return new OverBudgetError(failure.detail);
     case "refused":
       return new RefusedError(failure.message);
+    case "gaveUp":
+      return new GaveUpError(
+        failure.attempts,
+        failure.elapsedMs,
+        failure.detail,
+      );
     case "unsupported":
       return new UnsupportedError(failure.detail, failure.verb);
   }
@@ -1331,6 +1426,14 @@ export function toWireFailure(error: unknown): WireFailure {
   if (error instanceof RefusedError) {
     return { kind: "refused", message: error.message };
   }
+  if (error instanceof GaveUpError) {
+    return {
+      kind: "gaveUp",
+      attempts: error.attempts,
+      elapsedMs: error.elapsedMs,
+      detail: error.message,
+    };
+  }
   if (error instanceof UnsupportedError) {
     return { kind: "unsupported", verb: error.verb, detail: error.message };
   }
@@ -1339,6 +1442,7 @@ export function toWireFailure(error: unknown): WireFailure {
 }
 
 const NEW_CLASS_FAILURES: ReadonlySet<string> = new Set([
+  "gaveUp",
   "depthExceeded",
   "retryAfter",
   "overBudget",
@@ -1370,7 +1474,7 @@ export function replyForPeer(reply: Reply, peerVersion: number): Reply {
     peerVersion < ISSUE_WITH_SINCE_VERSION && reply.kind === "errorTyped" &&
     NEW_CLASS_FAILURES.has(reply.failure.kind)
   ) {
-    // Tags 9-13 are v9: an older peer gets the Display form inside Endpoint,
+    // Tags 9-14 are v9: an older peer gets the Display form inside Endpoint,
     // as a Rust v8 server sends it.
     return {
       kind: "errorTyped",
@@ -1589,6 +1693,12 @@ function putWireFailure(out: Writer, failure: WireFailure): void {
     case "refused":
       out.varint(12);
       out.string(failure.message);
+      break;
+    case "gaveUp":
+      out.varint(14);
+      out.varint(failure.attempts);
+      out.varint(failure.elapsedMs);
+      out.string(failure.detail);
       break;
     case "unsupported":
       out.varint(13);
@@ -1891,6 +2001,13 @@ function getWireFailure(r: Reader): WireFailure {
       }
       return { kind: "unsupported", verb, detail: r.string() };
     }
+    case 14:
+      return {
+        kind: "gaveUp",
+        attempts: r.varint(32),
+        elapsedMs: r.varint(),
+        detail: r.string(),
+      };
     default:
       // The taxonomy is append-only, and every existing variant carries its
       // message as a leading string; read it so an unknown FUTURE variant
@@ -2059,13 +2176,13 @@ export function decodeCall(payload: Uint8Array): Call {
  *   kind: "cached",
  *   cached: true,
  * });
- * // Failure variant 14, which no version has defined yet, carrying "x".
- * assertEquals(decodeReply(new Uint8Array([5, 14, 1, 0x78])), {
+ * // Failure variant 15, which no version has defined yet, carrying "x".
+ * assertEquals(decodeReply(new Uint8Array([5, 15, 1, 0x78])), {
  *   kind: "errorTyped",
  *   failure: {
  *     kind: "endpoint",
  *     message:
- *       `wire error variant 14 (newer than protocol v${PROTOCOL_VERSION}): x`,
+ *       `wire error variant 15 (newer than protocol v${PROTOCOL_VERSION}): x`,
  *   },
  * });
  * ```
