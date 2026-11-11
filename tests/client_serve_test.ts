@@ -464,3 +464,11 @@ Deno.test("two endpoints colliding on a target are refused at build time", () =>
   }
   assert(threw);
 });
+
+Deno.test("served inline UTF-8 arguments preserve a leading U+FEFF", async () => {
+  await withServer(async (path) => {
+    await using k = await connect(path);
+    const rep = await k.source("urn:ts:hello", { who: "\uFEFFAda" });
+    assertStrictEquals(rep.text, "Hello, \uFEFFAda!");
+  });
+});

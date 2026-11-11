@@ -671,3 +671,12 @@ Deno.test("a representation's data feeds BodyInit directly", () => {
   const body: BodyInit = new Representation("payload").data;
   assertStrictEquals(new TextDecoder().decode(body as Uint8Array), "payload");
 });
+
+Deno.test("wire strings preserve a leading U+FEFF", () => {
+  const reply = { kind: "error", message: "\uFEFFmessage" } as const;
+  assertEquals(wire.decodeReply(wire.encodeReply(reply)), reply);
+});
+
+Deno.test("representation text preserves a leading U+FEFF", () => {
+  assertStrictEquals(new Representation("\uFEFFbody").text, "\uFEFFbody");
+});

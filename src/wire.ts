@@ -124,7 +124,7 @@ export const HELLO_MAGIC: Uint8Array = new Uint8Array(
 export const MAX_FRAME = 64 * 1024 * 1024;
 
 const utf8Encoder = new TextEncoder();
-const utf8Decoder = new TextDecoder();
+const utf8Decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 
 /** Base for everything this package throws on purpose. */
 export class WireError extends Error {

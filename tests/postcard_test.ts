@@ -86,3 +86,100 @@ Deno.test("the writer grows past its initial capacity", () => {
   assertEquals(r.byteString(), big);
   r.finish();
 });
+
+Deno.test("postcard strings preserve a leading U+FEFF", () => {
+  for (const value of ["\uFEFF", "\uFEFFhello", "\uFEFF\uFEFF雪😀"]) {
+    const writer = new Writer();
+    writer.string(value);
+    const encoded = writer.finish();
+    const reader = new Reader(encoded);
+    const decoded = reader.string();
+    reader.finish();
+    assertStrictEquals(decoded, value);
+    const again = new Writer();
+    again.string(decoded);
+    assertEquals(again.finish(), encoded);
+  }
+});
+
+Deno.test("varints cannot exceed Rust postcard's byte limit even with zero padding", () => {
+  for (const bits of [16, 32, 64]) {
+    const maxBytes = Math.ceil(bits / 7);
+    const overlong = new Uint8Array(maxBytes + 1).fill(0x80);
+    overlong[maxBytes] = 0;
+    assertThrows(
+      () => new Reader(overlong).varint(bits),
+      DecodeError,
+      "too long",
+    );
+  }
+});
+
+Deno.test("Rust postcard permits zero-padded varints within the byte limit", () => {
+  for (const bits of [16, 32, 64]) {
+    const padded = new Uint8Array(Math.ceil(bits / 7)).fill(0x80);
+    padded[padded.length - 1] = 0;
+    assertStrictEquals(new Reader(padded).varint(bits), 0);
+  }
+});
+
+Deno.test("unsafe JS integers are refused on encode and decode", () => {
+  for (const value of [2 ** 53, 2 ** 64, Infinity, NaN]) {
+    assertThrows(() => encodeVarint(value), RangeError);
+  }
+  // 2^53 and u64::MAX are valid Rust u64s but cannot be exact JS numbers.
+  for (
+    const bytes of [
+      [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x10],
+      [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01],
+    ]
+  ) {
+    assertThrows(
+      () => new Reader(new Uint8Array(bytes)).varint(),
+      DecodeError,
+      "cannot be a JS number exactly",
+    );
+  }
+  // u64::MAX + 1: the tenth group may hold only one bit.
+  assertThrows(
+    () =>
+      new Reader(
+        new Uint8Array([
+          0x80,
+          0x80,
+          0x80,
+          0x80,
+          0x80,
+          0x80,
+          0x80,
+          0x80,
+          0x80,
+          0x02,
+        ]),
+      ).varint(),
+    DecodeError,
+    "exceeds u64",
+  );
+});
+
+Deno.test("truncated varints and byte string lengths are refused", () => {
+  for (let length = 0; length < 10; length++) {
+    assertThrows(
+      () => new Reader(new Uint8Array(length).fill(0x80)).varint(),
+      DecodeError,
+      "truncated",
+    );
+  }
+  assertThrows(
+    () => new Reader(new Uint8Array([4, 1, 2, 3])).byteString(),
+    DecodeError,
+    "truncated",
+  );
+  assertEquals(new Reader(new Uint8Array([0])).byteString(), new Uint8Array());
+});
+
+Deno.test("UTF-8 encoding replaces lone surrogates with U+FFFD", () => {
+  const writer = new Writer();
+  writer.string("\uD800x\uDC00");
+  assertStrictEquals(new Reader(writer.finish()).string(), "\uFFFDx\uFFFD");
+});
