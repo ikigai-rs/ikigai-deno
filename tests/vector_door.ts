@@ -16,6 +16,7 @@ import {
   type InputGroup,
   type ListSeparator,
   type OutputFrom,
+  type Resend,
   ServedDef,
   type ValueNoteInput,
 } from "../src/serve.ts";
@@ -60,7 +61,11 @@ function constructs(
   json: Json,
 ): Pick<
   ActionSpecModel,
-  "groups" | "arguments" | "outputFrom" | "failures" | "existenceSensitive"
+  | "groups"
+  | "arguments"
+  | "outputFrom"
+  | "failures"
+  | "existenceSensitive"
 > {
   const out: {
     failures?: FailureClass[];
@@ -88,6 +93,7 @@ export function actionSpec(json: Json): ActionSpecModel {
     outputs: list<string>(json, "outputs"),
     requires: list<string>(json, "requires"),
     ...constructs(json),
+    ...(json["resend"] == null ? {} : { resend: json["resend"] as Resend }),
   };
 }
 

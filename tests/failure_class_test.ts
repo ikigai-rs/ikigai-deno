@@ -6,11 +6,12 @@
  * `kind`, `class`, `transient`, `display`, wire tag (decoded from real bytes)
  * and the edge status with its `Retry-After` header.
  *
- * The payload layouts of tags 9-13 are not in the vectors (ikigai-wire owns
+ * The payload layouts of tags 9-14 are not in the vectors (ikigai-wire owns
  * them); this test builds them in serde field order, the way postcard writes
  * the variants: `DepthExceeded { depth, target }`, `RetryAfter { delay_ms:
  * Option<u64>, detail }`, `OverBudget { detail }`, `Refused(msg)`,
- * `Unsupported { verb: Option<Verb>, detail }`.
+ * `Unsupported { verb: Option<Verb>, detail }`,
+ * `GaveUp { attempts: u32, elapsed_ms: u64, detail }`.
  */
 
 import {
@@ -28,6 +29,7 @@ import {
   EndpointError,
   FAILURE_CLASSES,
   type FailureClass,
+  GaveUpError,
   OverBudgetError,
   RefusedError,
   replyForPeer,
@@ -49,6 +51,9 @@ interface Case {
   transient: boolean;
   display: string;
   retry_after_ms: number | null;
+  attempts: number | null;
+  elapsed_ms: number | null;
+  json: Json;
   wire_tag: number;
   http: { status: number; retry_after: number | null };
 }
@@ -137,6 +142,18 @@ function failureOf(c: Case): { failure: WireFailure; payload: Uint8Array } {
       out.string(str("detail"));
       break;
     }
+    case 14:
+      // The case is in microseconds; the wire and JSON faces floor elapsed ms.
+      failure = {
+        kind: "gaveUp",
+        attempts: e["attempts"] as number,
+        elapsedMs: Math.floor((e["elapsed_us"] as number) / 1000),
+        detail: str("detail"),
+      };
+      out.varint(failure.attempts);
+      out.varint(failure.elapsedMs);
+      out.string(failure.detail);
+      break;
     default:
       throw new Error(`unexpected wire tag ${c.wire_tag}`);
   }
@@ -164,6 +181,21 @@ for (const c of VECTORS.cases) {
     assertStrictEquals(retryAfterHeader(error), c.http.retry_after);
     if (error instanceof RetryAfterError) {
       assertStrictEquals(error.delayMs, c.retry_after_ms);
+    }
+    if (error instanceof GaveUpError) {
+      assertStrictEquals(error.attempts, c.attempts);
+      assertStrictEquals(error.elapsedMs, c.elapsed_ms);
+      assertEquals(error.toJson(), c.json);
+      assertEquals(GaveUpError.fromJson(c.json).toJson(), c.json);
+      assertEquals(
+        encodeReply({ kind: "errorTyped", failure: toWireFailure(error) }),
+        payload,
+      );
+      assertEquals(replyForPeer(reply, 9), reply);
+      assertEquals(replyForPeer(reply, 8), {
+        kind: "errorTyped",
+        failure: { kind: "endpoint", message: c.display },
+      });
     }
     // Tags 0-8 are what this side also SENDS: they re-encode to the same bytes.
     if (c.wire_tag <= 8) {
@@ -197,7 +229,7 @@ Deno.test("the other classes: Endpoint is unknown, Unsupported is permanent", ()
 Deno.test("an unknown tag still decodes as Endpoint(display)", () => {
   const out = new Writer();
   out.varint(REPLY_ERROR_TYPED);
-  out.varint(14);
+  out.varint(15);
   out.string("from the future");
   const reply = decodeReply(out.finish());
   assertEquals(reply.kind, "errorTyped");
@@ -241,4 +273,48 @@ Deno.test("an unsupported verb index this side does not know is refused", () => 
   out.optionVarint(99);
   out.string("x");
   assertThrows(() => decodeReply(out.finish()));
+});
+
+Deno.test("gave-up Turtle matches core and escapes the failure message", () => {
+  const error = new GaveUpError(9, 120000, "unavailable: down");
+  assertStrictEquals(
+    error.toTurtle(),
+    "@prefix ik: <https://ikigai-rs.dev/ns#> .\n" +
+      "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\n" +
+      '[] a ik:Failure ;\n    ik:failureKind "gave-up" ;\n    ' +
+      "ik:failureClass ik:TransientFailure ;\n    " +
+      'ik:failureMessage "gave up after 9 attempts over 120000 ms: unavailable: down" ;\n    ' +
+      'ik:attempts "9"^^xsd:nonNegativeInteger ;\n    ' +
+      'ik:elapsedMillis "120000"^^xsd:nonNegativeInteger .\n',
+  );
+  assert(
+    new GaveUpError(1, 0, '"\\\n\r\t').toTurtle().includes(
+      'ms: \\"\\\\\\n\\r\\t"',
+    ),
+  );
+});
+
+Deno.test("gave-up JSON refuses missing, fractional, negative, and out-of-range counts", () => {
+  const valid = {
+    kind: "gave-up",
+    attempts: 1,
+    elapsed_ms: 250,
+    detail: "down",
+  };
+  for (
+    const json of [
+      null,
+      {},
+      { ...valid, attempts: "one" },
+      { ...valid, attempts: -1 },
+      { ...valid, attempts: 1.5 },
+      { ...valid, attempts: 0x100000000 },
+      { ...valid, elapsed_ms: -1 },
+      { ...valid, elapsed_ms: 1.9 },
+      { ...valid, elapsed_ms: Number.MAX_SAFE_INTEGER + 1 },
+      { ...valid, detail: null },
+    ]
+  ) {
+    assertThrows(() => GaveUpError.fromJson(json), TypeError);
+  }
 });

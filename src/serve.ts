@@ -422,6 +422,19 @@ export type ExistsHandler = (
 // The description model and its three faces
 // ---------------------------------------------------------------------------
 
+/** A declared resend guarantee; absent or null never permits a resend. */
+export type Resend = "safe" | { readonly key: string };
+
+/** Whether the contract explicitly permits a resend with these argument names. */
+export function resendSafe(
+  contract: { readonly resend?: Resend | null },
+  arguments_: Readonly<Record<string, unknown>> = {},
+): boolean {
+  const resend = contract.resend;
+  return resend === "safe" ||
+    (resend != null && Object.hasOwn(arguments_, resend.key));
+}
+
 /** `ikigai_core::ActionSpec`: one verb's contract. */
 export interface ActionSpecModel {
   /** The verb this contract is for (never Meta). */
@@ -454,6 +467,8 @@ export interface ActionSpecModel {
   readonly failures?: readonly FailureClass[];
   /** Whether this contract protects resource existence; false when absent (core 0.2.2). */
   readonly existenceSensitive?: boolean;
+  /** Resend safety, only when explicitly declared (core 0.3.4). */
+  readonly resend?: Resend | null;
 }
 
 /** `ikigai_core::Description`, the fields this peer emits. */
@@ -634,10 +649,18 @@ function failureClassTerm(failure: FailureClass): string {
 function constructsJson(
   c: Pick<
     ActionSpecModel,
-    "groups" | "arguments" | "outputFrom" | "failures" | "existenceSensitive"
+    | "groups"
+    | "arguments"
+    | "outputFrom"
+    | "failures"
+    | "existenceSensitive"
+    | "resend"
   >,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
+  if (c.resend != null) {
+    out["resend"] = c.resend === "safe" ? "safe" : { ...c.resend };
+  }
   if (c.existenceSensitive) out["existence_sensitive"] = true;
   if (c.failures !== undefined) out["failures"] = [...c.failures];
   if (c.groups !== undefined && c.groups.length > 0) {
@@ -872,6 +895,13 @@ function descriptionTurtle(d: DescriptionModel): string {
     }
     if (action.existenceSensitive) {
       actionPreds.push("ik:existenceSensitive true");
+    }
+    if (action.resend === "safe") {
+      actionPreds.push("ik:resendSafe true");
+    } else if (action.resend != null) {
+      actionPreds.push(
+        `ik:resendKey <${actionIri}:input:${nameFragment(action.resend.key)}>`,
+      );
     }
     for (const arg of action.inputs) {
       const nodeIri = `${actionIri}:input:${nameFragment(arg.name)}`;
@@ -1304,6 +1334,8 @@ export interface EndpointOptions {
   requires?: string[];
   /** Hide existence from callers refused by the capability floor; false by default. */
   existenceSensitive?: boolean;
+  /** Explicit resend guarantee; absent is unsafe regardless of verb. */
+  resend?: Resend | null;
 }
 
 /** A served single-verb Source endpoint: a handler plus its self-description. */
@@ -1320,6 +1352,8 @@ export class EndpointDef extends ServedDef {
   readonly requires: readonly string[];
   /** Whether the capability floor conceals this door from refused callers. */
   readonly existenceSensitive: boolean;
+  /** The declared resend guarantee, if any. */
+  readonly resend?: Resend | null;
 
   /**
    * Prefer {@linkcode endpoint}, which takes the same values in reading
@@ -1338,6 +1372,7 @@ export class EndpointDef extends ServedDef {
     this.cacheable = options.cacheable ?? false;
     this.requires = [...(options.requires ?? [])];
     this.existenceSensitive = options.existenceSensitive ?? false;
+    this.resend = options.resend;
   }
 
   /**
@@ -1354,7 +1389,16 @@ export class EndpointDef extends ServedDef {
       outputs: [this.output],
       requires: this.requires,
       existenceSensitive: this.existenceSensitive,
-      actions: [],
+      // Core keeps resend on explicit action contracts, never the flat form.
+      actions: this.resend == null ? [] : [{
+        verb: Verb.Source,
+        summary: "",
+        inputs: [...this.bindings, ...this.args],
+        outputs: [this.output],
+        requires: this.requires,
+        existenceSensitive: this.existenceSensitive,
+        resend: this.resend,
+      }],
     };
   }
 
@@ -1430,6 +1474,8 @@ export interface ActionOptions {
   requires?: string[];
   /** Hide existence from callers refused by the capability floor; false by default. */
   existenceSensitive?: boolean;
+  /** Explicit resend guarantee; absent is unsafe regardless of verb. */
+  resend?: Resend | null;
 }
 
 /** A Source may mark its answer a pure function of the door's state. */
@@ -1471,6 +1517,8 @@ interface ActionDef {
   readonly output: string;
   readonly requires: readonly string[];
   readonly existenceSensitive: boolean;
+  /** The declared resend guarantee, if any. */
+  readonly resend?: Resend | null;
   readonly cacheable: boolean;
   readonly handler: Handler | null;
   readonly exists: ExistsHandler | null;
@@ -1598,6 +1646,7 @@ export class Family extends ServedDef {
       output: options.output ?? "text/plain;charset=utf-8",
       requires: [...(options.requires ?? [])],
       existenceSensitive: options.existenceSensitive ?? false,
+      resend: options.resend,
       cacheable: cacheable ?? false,
       handler,
       exists: null,
@@ -1637,6 +1686,7 @@ export class Family extends ServedDef {
           outputs: [a.output],
           requires: a.requires,
           existenceSensitive: a.existenceSensitive,
+          resend: a.resend,
         };
       }),
     };

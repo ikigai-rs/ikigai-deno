@@ -339,7 +339,7 @@ function canonicalInput(input: ArgSpec): CanonicalInput {
  * construct v1 cannot carry (an input's `needs`, `list`, value notes,
  * examples or empty enumeration, a group, an open or envelope argument set,
  * `output_from`, stated failure classes, existence sensitivity, a body reader,
- * an input a named request fixes) is digested under `ikigai:contract:v2` instead (core's
+ * an input a named request fixes, or resend safety) is digested under `ikigai:contract:v2` instead (core's
  * `contract_id_v2`; the byte layout is in core's `tests/vectors/README.md`);
  * every other contract keeps its v1 digest, so no existing IRI moves.
  */
@@ -369,7 +369,8 @@ export function contractId(endpointId: string, spec: ActionSpecModel): string {
 
 /** Whether a contract uses a construct only the v2 form carries (core's `uses_v2`). */
 function usesV2(spec: ActionSpecModel): boolean {
-  return spec.existenceSensitive === true || spec.failures !== undefined ||
+  return spec.resend != null || spec.existenceSensitive === true ||
+    spec.failures !== undefined ||
     (spec.groups?.length ?? 0) > 0 ||
     spec.arguments !== undefined ||
     spec.outputFrom !== undefined ||
@@ -469,6 +470,12 @@ function contractIdV2(endpointId: string, spec: ActionSpecModel): string {
   if (fixed.length > 0) {
     h.u8(4);
     h.set(fixed);
+  }
+  // Resend is an optional tail: undeclared contracts retain their identity.
+  if (spec.resend != null) {
+    h.u8(5);
+    h.u8(spec.resend === "safe" ? 0 : 1);
+    if (spec.resend !== "safe") h.str(spec.resend.key);
   }
   return `b3:${h.digestHex()}`;
 }
