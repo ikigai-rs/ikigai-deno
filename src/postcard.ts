@@ -30,7 +30,7 @@
  */
 
 const utf8Encoder = new TextEncoder();
-const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 /** A byte stream that does not parse as the expected postcard layout. */
 export class DecodeError extends Error {
@@ -100,6 +100,7 @@ export class Writer {
     this.bytes(b);
   }
 
+  /** UTF-8 text; lone JS surrogates become U+FFFD, as in TextEncoder. */
   string(s: string): void {
     this.byteString(utf8Encoder.encode(s));
   }
@@ -160,7 +161,7 @@ export class Reader {
       n |= BigInt(b & 0x7f) << shift;
       if ((b & 0x80) === 0) break;
       shift += 7n;
-      if (shift >= BigInt(maxBits) + 7n) {
+      if (shift >= BigInt(maxBits)) {
         throw new DecodeError("varint too long");
       }
     }

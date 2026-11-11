@@ -391,22 +391,25 @@ class MemoryStream implements wire.ByteStream {
   #data: Uint8Array;
   #pos = 0;
   written: number[] = [];
+  readonly chunkSize: number;
 
-  constructor(data: Uint8Array = new Uint8Array(0)) {
+  constructor(data: Uint8Array = new Uint8Array(0), chunkSize = Infinity) {
     this.#data = data;
+    this.chunkSize = chunkSize;
   }
 
   read(p: Uint8Array): Promise<number | null> {
     if (this.#pos >= this.#data.length) return Promise.resolve(null);
-    const n = Math.min(p.length, this.#data.length - this.#pos);
+    const n = Math.min(p.length, this.#data.length - this.#pos, this.chunkSize);
     p.set(this.#data.subarray(this.#pos, this.#pos + n));
     this.#pos += n;
     return Promise.resolve(n);
   }
 
   write(p: Uint8Array): Promise<number> {
-    this.written.push(...p);
-    return Promise.resolve(p.length);
+    const n = Math.min(p.length, this.chunkSize);
+    this.written.push(...p.subarray(0, n));
+    return Promise.resolve(n);
   }
 }
 
@@ -438,4 +441,32 @@ Deno.test("an oversized length header is rejected before allocating", async () =
   new DataView(header.buffer).setUint32(0, wire.MAX_FRAME + 1, false);
   const stream = new FrameStream(new MemoryStream(header));
   await assertRejects(() => stream.readFrame(), ProtocolError, "exceeds");
+});
+
+Deno.test("frames survive single-byte reads and partial writes", async () => {
+  const sink = new MemoryStream(new Uint8Array(), 1);
+  const stream = new FrameStream(sink);
+  const payload = utf8.encode("雪😀");
+  await stream.writeFrame(payload);
+  await stream.writeFrame(new Uint8Array());
+  const reader = new FrameStream(
+    new MemoryStream(new Uint8Array(sink.written), 1),
+  );
+  assertEquals(await reader.readFrame(), payload);
+  assertEquals(await reader.readFrame(), new Uint8Array());
+});
+
+Deno.test("a frame exactly at MAX_FRAME is accepted", async () => {
+  const payload = new Uint8Array(wire.MAX_FRAME);
+  payload[0] = 0x12;
+  payload[payload.length - 1] = 0x34;
+  const stream = new FrameStream(new MemoryStream(wire.frame(payload)));
+  assertEquals(await stream.readFrame(), payload);
+});
+
+Deno.test("EOF in a partial frame header is refused", async () => {
+  for (const length of [1, 2, 3]) {
+    const stream = new FrameStream(new MemoryStream(new Uint8Array(length)));
+    await assertRejects(() => stream.readFrame(), EofError, "mid-frame");
+  }
 });

@@ -107,7 +107,7 @@ export type { ProposedArgs, Violation, ViolationKind } from "./check.ts";
 /** The `ik:` vocabulary namespace the Turtle Meta face writes against. */
 export const VOCAB_NS = "https://ikigai-rs.dev/ns#";
 
-const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 /**
  * Where an input's value comes from (`ikigai_core::InputSource`): a by-value
