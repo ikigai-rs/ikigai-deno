@@ -35,7 +35,7 @@ const ESCAPES: Record<string, string> = {
  * idempotent, by design.
  *
  * ```ts
- * import { htmlText } from "@ikigai/deno/html";
+ * import { htmlText } from "@ikigai/ts/html";
  * import { assertEquals } from "@std/assert";
  * assertEquals(htmlText("<b>Tom & Jerry's</b>"), "&lt;b&gt;Tom &amp; Jerry&#39;s&lt;/b&gt;");
  * ```
@@ -128,7 +128,7 @@ function hexDigit(byte: number | undefined): number {
  * a `%` not followed by two hex digits.
  *
  * ```ts
- * import { percentDecodeBytes } from "@ikigai/deno/html";
+ * import { percentDecodeBytes } from "@ikigai/ts/html";
  * import { assertEquals } from "@std/assert";
  * const raw = new TextEncoder().encode("%FF+%2b");
  * assertEquals(percentDecodeBytes(raw, true), new Uint8Array([0xFF, 0x20, 0x2B]));
@@ -171,7 +171,7 @@ export function percentDecodeBytes(
  * or `invalid_utf8` (use {@link percentDecodeBytes} for binary data).
  *
  * ```ts
- * import { percentDecode, urlSegment } from "@ikigai/deno/html";
+ * import { percentDecode, urlSegment } from "@ikigai/ts/html";
  * import { assertEquals } from "@std/assert";
  * assertEquals(percentDecode("caf%C3%A9+a", true), "café a");
  * assertEquals(percentDecode("a+b%2Bc", false), "a+b+c");
@@ -260,7 +260,7 @@ function invalidUtf8Offset(bytes: Uint8Array): number {
  * No partial pairs are returned.
  *
  * ```ts
- * import { formPairs } from "@ikigai/deno/html";
+ * import { formPairs } from "@ikigai/ts/html";
  * import { assertEquals } from "@std/assert";
  * assertEquals(formPairs("tag=c%2B%2B&tag=rust+lang&flag"), [
  *   ["tag", "c++"], ["tag", "rust lang"], ["flag", ""],

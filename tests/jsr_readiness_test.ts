@@ -74,6 +74,7 @@ Deno.test("JSR: the manifest carries the publish fields", () => {
 });
 
 Deno.test("JSR: exports are exactly the six entrypoints", () => {
+  assertEquals(manifest.name, "@ikigai/ts");
   assertEquals(manifest.exports, EXPECTED_EXPORTS);
 });
 

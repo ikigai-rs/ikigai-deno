@@ -22,7 +22,7 @@
  * IRI whatever the name holds.
  *
  * ```ts
- * import { contractIri, matchIri, Verb } from "@ikigai/deno";
+ * import { contractIri, matchIri, Verb } from "@ikigai/ts";
  *
  * matchIri(Verb.Source, "urn:file:{path}");
  * // "urn:ikigai:match:source:urn:file:%7Bpath%7D"

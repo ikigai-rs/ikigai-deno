@@ -8,8 +8,8 @@
  * argument sets.
  *
  * ```ts
- * import { ArgSpec, checkAction } from "@ikigai/deno/serve";
- * import { Verb } from "@ikigai/deno";
+ * import { ArgSpec, checkAction } from "@ikigai/ts/serve";
+ * import { Verb } from "@ikigai/ts";
  *
  * const spec = {
  *   verb: Verb.Sink,
