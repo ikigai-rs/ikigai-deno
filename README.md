@@ -557,6 +557,38 @@ cells it sourced) would be a traccessor — its answer would depend on reads the
 host never saw it make, so nothing could ever cut it. The rules stay resources
 in the kernel; the app only fills templates with their answers.
 
+## Runtimes (spike, ledger #3627)
+
+Only the socket, listener, file and environment calls need a runtime, and they
+sit behind one interface, `Runtime` (`src/runtime.ts`). `denoRuntime` is the
+default and makes the same `Deno.*` calls as before. A Node adapter over
+`node:net` and `node:fs`, `src/runtime_node.ts`, also runs under Bun. It is not
+a package export yet, so import it by path:
+
+```ts ignore
+import { nodeRuntime } from "./src/runtime_node.ts";
+import { connect } from "./src/client.ts";
+import { endpoint, Server } from "./src/serve.ts";
+
+const server = new Server(
+  [endpoint("urn:ts:hi", {}, () => "hi")],
+  "/tmp/p.sock",
+  {
+    runtime: nodeRuntime,
+  },
+);
+await server.ready; // Node binds asynchronously; under Deno this is immediate
+await using k = await connect("/tmp/p.sock", { runtime: nodeRuntime });
+```
+
+`deno task cross-runtime` runs the shared vectors (`failure_class`, `contract`,
+`capability`, `html`, `auth`) and the adapter's socket checks under Deno, Node
+and Bun. `deno test -A` runs the Node and Bun rows for whichever of `node` and
+`bun` are on `PATH` (`tests/cross_runtime_test.ts`), and reports a missing one
+as absent instead of failing. The examples are still Deno programs: Fresh only
+runs on Deno, and the other examples start through `Deno.serve`, `Deno.args` or
+`Deno.env`.
+
 ## Security posture
 
 The socket is `0600` in a `0700` directory, and the kernel enforces that mode on

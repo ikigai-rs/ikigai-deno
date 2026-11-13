@@ -99,8 +99,15 @@ import {
   nameFragment,
 } from "./contract.ts";
 import { isAbsoluteIri } from "./iri.ts";
+import {
+  defaultRuntime,
+  type Runtime,
+  type RuntimeConn,
+  type RuntimeListener,
+} from "./runtime.ts";
 
 export { TemplateError, UriTemplate } from "./template.ts";
+export type { Runtime, RuntimeConn, RuntimeListener } from "./runtime.ts";
 export { checkAction, GIVEN_TWICE } from "./check.ts";
 export type { ProposedArgs, Violation, ViolationKind } from "./check.ts";
 
@@ -2069,6 +2076,12 @@ export class Space {
 // The socket server
 // ---------------------------------------------------------------------------
 
+/** How a {@linkcode Server} binds. */
+export interface ServerOptions {
+  /** The runtime adapter that listens. Default `denoRuntime` under Deno. */
+  runtime?: Runtime;
+}
+
 /**
  * A wire server for a set of endpoints. `serve()` blocks until
  * {@linkcode Server.shutdown} is called (from another task, or via
@@ -2079,31 +2092,43 @@ export class Server {
   readonly space: Space;
   /** The Unix socket path the server listens on. */
   readonly path: string;
-  #listener: Deno.UnixListener;
-  #conns = new Set<Deno.UnixConn>();
+  #listener: RuntimeListener;
+  #conns = new Set<RuntimeConn>();
   #closing = false;
 
   /**
    * Bind now, before {@linkcode Server.serve}: creates the parent directory
    * (`0700`) if missing, REMOVES any file already at `path`, listens, and
    * narrows the socket to `0600`, which is this server's whole access gate.
+   * `options.runtime` is the adapter that does it; default `denoRuntime`.
    */
-  constructor(endpoints: readonly ServedDef[], path: string) {
+  constructor(
+    endpoints: readonly ServedDef[],
+    path: string,
+    options: ServerOptions = {},
+  ) {
+    const runtime = options.runtime ?? defaultRuntime();
     this.space = new Space(endpoints);
     this.path = path;
     const slash = path.lastIndexOf("/");
     if (slash > 0) {
-      Deno.mkdirSync(path.slice(0, slash), { recursive: true, mode: 0o700 });
+      runtime.mkdirSync(path.slice(0, slash), { recursive: true, mode: 0o700 });
     }
     try {
-      Deno.removeSync(path); // a leftover socket would fail the bind
+      runtime.removeSync(path); // a leftover socket would fail the bind
     } catch {
       // absent is fine
     }
-    this.#listener = Deno.listen({ transport: "unix", path });
-    // Deno binds the socket with the process umask; narrow it. (No
-    // SO_PEERCRED equivalent in Deno, so this mode IS the access gate.)
-    Deno.chmodSync(path, 0o600);
+    this.#listener = runtime.listenUnix(path, 0o600);
+  }
+
+  /**
+   * Resolves once the socket is bound and narrowed to `0600`. Under Deno
+   * that is already true when the constructor returns; an adapter that binds
+   * asynchronously (Node) is listening only after this.
+   */
+  get ready(): Promise<void> {
+    return this.#listener.ready;
   }
 
   /** Accept and serve connections until {@linkcode shutdown}. */
@@ -2134,7 +2159,7 @@ export class Server {
     await Promise.all(handlers);
   }
 
-  async #handle(conn: Deno.UnixConn): Promise<void> {
+  async #handle(conn: RuntimeConn): Promise<void> {
     const stream = new FrameStream(conn);
     // The FIRST frame must be the hello (wire v7): a v7 or v8 client is
     // answered with ITS OWN version and served at it (v8), and its mode
@@ -2262,8 +2287,9 @@ export class Server {
 export async function serve(
   endpoints: readonly ServedDef[],
   path: string,
+  options: ServerOptions = {},
 ): Promise<void> {
-  const server = new Server(endpoints, path);
+  const server = new Server(endpoints, path, options);
   try {
     await server.serve();
   } finally {
