@@ -45,6 +45,7 @@
     "doc-test": "deno test --doc src/wire.ts src/template.ts src/html.ts src/auth.ts",
     "publish-check": "deno publish --dry-run --allow-dirty",
     "test": "deno test -A",
+    "cross-runtime": "deno run -A tests/cross_runtime/run.ts",
     "check": "deno task fmt-check && deno task lint && deno task typecheck && deno task doc-check && deno task doc-lint && deno task doc-test && deno task test"
   }
 }

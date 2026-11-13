@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — a runtime adapter for Deno, Node and Bun (spike, ledger #3627)
+
+- The client's and server's socket, listener, file and environment calls go
+  through one `Runtime` interface (`src/runtime.ts`). The default,
+  `denoRuntime`, makes the same `Deno.*` calls in the same order, so behavior
+  under Deno is unchanged. `connect` takes `options.runtime`. `Server` and
+  `serve` take a third `{ runtime }` argument. `Server.ready` resolves once the
+  socket is bound and set to `0600`.
+- A Node adapter, `src/runtime_node.ts` (`node:net`, `node:fs`), is not a
+  package export yet. It passes the same socket checks under Deno, Node 24 and
+  Bun.
+- `deno task cross-runtime` runs the shared vectors and those socket checks
+  under all three runtimes. `deno test -A` runs the Node and Bun rows for
+  whichever of `node` and `bun` are on `PATH`. No package published.
+
 ## 0.2.0 — public builders expose existence sensitivity (ledger #2892)
 
 - The JSR `license` field is `MIT`: JSR accepts one SPDX identifier and refused

@@ -48,6 +48,9 @@ import {
   Verb,
   WireError,
 } from "./wire.ts";
+import { defaultRuntime, type Runtime, type RuntimeConn } from "./runtime.ts";
+
+export type { Runtime, RuntimeConn } from "./runtime.ts";
 
 /**
  * Mirrors the Rust IPC client's DEFAULT_TIMEOUT: five minutes, because what
@@ -66,11 +69,11 @@ export class ConnectionLost extends WireError {}
  * `<runtime-dir>/ikigai/kernel.sock` where `<runtime-dir>` is
  * `$XDG_RUNTIME_DIR` when set, else `$TMPDIR`/`/tmp` plus the uid.
  */
-export function defaultSocketPath(): string {
-  const runtime = Deno.env.get("XDG_RUNTIME_DIR");
-  if (runtime) return `${runtime}/ikigai/kernel.sock`;
-  const tmp = (Deno.env.get("TMPDIR") ?? "/tmp").replace(/\/$/, "");
-  return `${tmp}/ikigai-${Deno.uid()}/ikigai/kernel.sock`;
+export function defaultSocketPath(runtime: Runtime = defaultRuntime()): string {
+  const runtimeDir = runtime.env("XDG_RUNTIME_DIR");
+  if (runtimeDir) return `${runtimeDir}/ikigai/kernel.sock`;
+  const tmp = (runtime.env("TMPDIR") ?? "/tmp").replace(/\/$/, "");
+  return `${tmp}/ikigai-${runtime.uid()}/ikigai/kernel.sock`;
 }
 
 /** What an argument may be passed as. */
@@ -162,6 +165,11 @@ export interface ConnectOptions {
    * mount says otherwise.
    */
   mode?: HelloMode;
+  /**
+   * The runtime adapter that dials (and redials). Default `denoRuntime`
+   * under Deno.
+   */
+  runtime?: Runtime;
 }
 
 /**
@@ -170,7 +178,7 @@ export interface ConnectOptions {
  * internally — awaiting two sources at once is safe, just sequential.
  */
 export class Client {
-  #conn: Deno.UnixConn;
+  #conn: RuntimeConn;
   #stream: FrameStream;
   #timeoutMs: number | null;
   #timedOut = false;
@@ -181,6 +189,8 @@ export class Client {
   /** Where to redial; `null` disables reconnection (hand-built clients). */
   #path: string | null;
   #mode: HelloMode;
+  /** The adapter a redial dials with; `null` is the runtime's own. */
+  #runtime: Runtime | null;
   #serverVersion: number;
   /** The retry budget and deadline each call carries to a v9 peer. */
   run: ClientRun | null;
@@ -197,7 +207,7 @@ export class Client {
    * redials, so the first lost connection ends it.
    */
   constructor(
-    conn: Deno.UnixConn,
+    conn: RuntimeConn,
     stream: FrameStream,
     options: {
       capability?: Capability;
@@ -208,6 +218,8 @@ export class Client {
       path?: string;
       /** The hello mode a redial replays. Default verbatim. */
       mode?: HelloMode;
+      /** The adapter a redial dials with. Default `denoRuntime`. */
+      runtime?: Runtime;
     } = {},
   ) {
     this.#conn = conn;
@@ -220,6 +232,7 @@ export class Client {
     this.run = options.run ?? null;
     this.#path = options.path ?? null;
     this.#mode = options.mode ?? HelloMode.Verbatim;
+    this.#runtime = options.runtime ?? null;
   }
 
   /**
@@ -238,6 +251,7 @@ export class Client {
   /** Dial + hello afresh (same path, same mode) and adopt the connection. */
   async #redial(): Promise<void> {
     const { conn, stream, serverVersion } = await handshake(
+      this.#runtime ?? defaultRuntime(),
       this.#path!,
       this.#mode,
       this.#timeoutMs,
@@ -523,12 +537,14 @@ export async function connect(
   path?: string,
   options: ConnectOptions = {},
 ): Promise<Client> {
-  const socketPath = path ?? defaultSocketPath();
+  const runtime = options.runtime ?? defaultRuntime();
+  const socketPath = path ?? defaultSocketPath(runtime);
   const mode = options.mode ?? HelloMode.Verbatim;
   const timeoutMs = options.timeoutMs === undefined
     ? DEFAULT_TIMEOUT_MS
     : options.timeoutMs;
   const { conn, stream, serverVersion } = await handshake(
+    runtime,
     socketPath,
     mode,
     timeoutMs,
@@ -540,6 +556,7 @@ export async function connect(
     run: options.run,
     path: socketPath,
     mode,
+    runtime,
   });
 }
 
@@ -558,15 +575,17 @@ export async function connect(
  * answered with exactly that version; anything else is a mismatch.
  */
 async function handshake(
+  runtime: Runtime,
   socketPath: string,
   mode: HelloMode,
   timeoutMs: number | null,
 ): Promise<{
-  conn: Deno.UnixConn;
+  conn: RuntimeConn;
   stream: FrameStream;
   serverVersion: number;
 }> {
   const first = await helloOnce(
+    runtime,
     socketPath,
     mode,
     timeoutMs,
@@ -583,7 +602,13 @@ async function handshake(
     throw mismatch(answered, wire.PROTOCOL_VERSION);
   }
   // An older server we still speak: redial at its version.
-  const second = await helloOnce(socketPath, mode, timeoutMs, answered);
+  const second = await helloOnce(
+    runtime,
+    socketPath,
+    mode,
+    timeoutMs,
+    answered,
+  );
   if (second.answer.version !== answered) {
     second.conn.close();
     throw mismatch(second.answer.version, answered);
@@ -604,16 +629,17 @@ function mismatch(serverVersion: number, offered: number): ProtocolError {
 
 /** One dial and one hello exchange at `version`; returns the raw answer. */
 async function helloOnce(
+  runtime: Runtime,
   socketPath: string,
   mode: HelloMode,
   timeoutMs: number | null,
   version: number,
 ): Promise<{
-  conn: Deno.UnixConn;
+  conn: RuntimeConn;
   stream: FrameStream;
   answer: wire.Hello;
 }> {
-  const conn = await dial(socketPath);
+  const conn = await dial(runtime, socketPath);
   const stream = new FrameStream(conn);
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -666,9 +692,9 @@ async function helloOnce(
   return { conn, stream, answer };
 }
 
-async function dial(path: string): Promise<Deno.UnixConn> {
+async function dial(runtime: Runtime, path: string): Promise<RuntimeConn> {
   try {
-    return await Deno.connect({ transport: "unix", path });
+    return await runtime.connectUnix(path);
   } catch (e) {
     throw new ConnectionLost(
       `cannot reach a kernel server at ${path} (${e}); ` +

@@ -102,6 +102,9 @@ export {
 } from "./client.ts";
 export type { Args, ArgValue, ClientRun, ConnectOptions } from "./client.ts";
 
+export { defaultRuntime, denoRuntime } from "./runtime.ts";
+export type { Runtime, RuntimeConn, RuntimeListener } from "./runtime.ts";
+
 export {
   CONTRACT_PREFIX,
   contractId,
@@ -150,6 +153,7 @@ export type {
   ProposedArgs,
   Resend,
   RunContext,
+  ServerOptions,
   SourceOptions,
   ValueNote,
   ValueNoteInput,
