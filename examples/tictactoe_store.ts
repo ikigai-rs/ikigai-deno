@@ -8,8 +8,8 @@
  * file is the one piece of state, and a host mounts it:
  *
  * ```sh
- * deno run -A examples/tictactoe_store.ts /tmp/ttt.sock
- * ikigai --override urn:iki:tutorial:ttt:stored:=/tmp/ttt.sock \
+ * deno run -A examples/tictactoe_store.ts /tmp/ikigai-$(id -u)/ttt.sock
+ * ikigai --override urn:iki:tutorial:ttt:stored:=/tmp/ikigai-$(id -u)/ttt.sock \
  *   -c 'sink urn:iki:tutorial:ttt:stored:1:1 X'
  * ```
  *

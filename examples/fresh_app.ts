@@ -20,8 +20,8 @@
  * Run (direct, no Rust needed):
  *
  * ```sh
- * deno run -A examples/endpoints.ts /tmp/ts-examples.sock &
- * IKIGAI_SOCKET=/tmp/ts-examples.sock deno run -A examples/fresh_app.ts
+ * deno run -A examples/endpoints.ts /tmp/ikigai-$(id -u)/ts-examples.sock &
+ * IKIGAI_SOCKET=/tmp/ikigai-$(id -u)/ts-examples.sock deno run -A examples/fresh_app.ts
  * ```
  */
 

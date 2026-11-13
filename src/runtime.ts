@@ -32,8 +32,26 @@ export interface RuntimeListener {
   readonly ready: Promise<void>;
   /** The next connection; rejects once the listener is closed. */
   accept(): Promise<RuntimeConn>;
-  /** Stop listening and remove the socket file; a pending accept rejects. */
+  /**
+   * Stop listening; a pending accept rejects. Deno and Node also unlink the
+   * path they BOUND, whatever is there by then, so the server binds in a
+   * private directory and removes its final path itself.
+   */
   close(): void;
+}
+
+/** What {@linkcode Runtime.lstatSync} reports about a path, not following a link. */
+export interface RuntimeStat {
+  /** What the path is. */
+  kind: "file" | "directory" | "symlink" | "socket" | "other";
+  /** The owner's user id, or `null` where there is none (Windows). */
+  uid: number | null;
+  /** The permission and type bits, or `null` where there are none (Windows). */
+  mode: number | null;
+  /** The device the path lives on. */
+  dev: number;
+  /** The inode number, or `null` where there is none (Windows). */
+  ino: number | null;
 }
 
 /** The calls the client and the server need from their runtime. */
@@ -42,12 +60,34 @@ export interface Runtime {
   connectUnix(path: string): Promise<RuntimeConn>;
   /**
    * Bind and listen on the Unix socket at `path`, then narrow the socket
-   * file to `mode` (the server's access gate).
+   * file to `mode`, then call `onBound`, in that order and before `ready`
+   * resolves. If `onBound` throws, the listener is closed and the error is
+   * the bind's: thrown here by an adapter that binds synchronously (Deno),
+   * else the rejection of `ready`. The server's `onBound` moves the socket
+   * to its final path.
    */
-  listenUnix(path: string, mode: number): RuntimeListener;
-  /** `mkdir -p` with `mode` for the directories it creates. */
-  mkdirSync(path: string, options: { recursive: true; mode: number }): void;
-  /** Remove the file at `path`; throws when it is absent. */
+  listenUnix(
+    path: string,
+    mode: number,
+    onBound?: () => void,
+  ): RuntimeListener;
+  /** Create ONE directory with `mode` (less the umask); throws if it exists. */
+  mkdirSync(path: string, mode: number): void;
+  /**
+   * Create a new directory with a random name starting `prefix` inside
+   * `dir`, mode `0700`, and return its path.
+   */
+  makeTempDirSync(dir: string, prefix: string): string;
+  /** What is at `path`, not following a symlink; `null` when nothing is. */
+  lstatSync(path: string): RuntimeStat | null;
+  /** `path` with every symlink resolved, absolute. */
+  realPathSync(path: string): string;
+  /** Rename `from` to `to`, atomically replacing a file at `to`. */
+  renameSync(from: string, to: string): void;
+  /**
+   * Remove the file, socket or EMPTY directory at `path`; throws when it is
+   * absent.
+   */
   removeSync(path: string): void;
   /** An environment variable, or `undefined` when unset. */
   env(name: string): string | undefined;
@@ -58,18 +98,51 @@ export interface Runtime {
 /** The Deno adapter: the `Deno.*` calls, unchanged. */
 export const denoRuntime: Runtime = {
   connectUnix: (path) => Deno.connect({ transport: "unix", path }),
-  listenUnix(path, mode) {
+  listenUnix(path, mode, onBound) {
     const listener = Deno.listen({ transport: "unix", path });
-    // Deno binds the socket with the process umask; narrow it. (No
-    // SO_PEERCRED equivalent in Deno, so this mode IS the access gate.)
-    Deno.chmodSync(path, mode);
+    try {
+      // Deno binds the socket with the process umask; narrow it. (No
+      // SO_PEERCRED equivalent in Deno, so this mode is part of the gate.)
+      Deno.chmodSync(path, mode);
+      onBound?.();
+    } catch (e) {
+      listener.close();
+      throw e;
+    }
     return {
       ready: Promise.resolve(),
       accept: () => listener.accept(),
       close: () => listener.close(),
     };
   },
-  mkdirSync: (path, options) => Deno.mkdirSync(path, options),
+  mkdirSync: (path, mode) => Deno.mkdirSync(path, { mode }),
+  makeTempDirSync: (dir, prefix) => Deno.makeTempDirSync({ dir, prefix }),
+  lstatSync(path) {
+    let st: Deno.FileInfo;
+    try {
+      st = Deno.lstatSync(path);
+    } catch (e) {
+      if (e instanceof Deno.errors.NotFound) return null;
+      throw e;
+    }
+    return {
+      kind: st.isSymlink
+        ? "symlink"
+        : st.isDirectory
+        ? "directory"
+        : st.isFile
+        ? "file"
+        : st.isSocket
+        ? "socket"
+        : "other",
+      uid: st.uid,
+      mode: st.mode,
+      dev: st.dev,
+      ino: st.ino,
+    };
+  },
+  realPathSync: (path) => Deno.realPathSync(path),
+  renameSync: (from, to) => Deno.renameSync(from, to),
   removeSync: (path) => Deno.removeSync(path),
   env: (name) => Deno.env.get(name),
   uid: () => Deno.uid(),

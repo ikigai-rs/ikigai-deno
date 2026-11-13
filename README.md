@@ -236,16 +236,18 @@ const hello = endpoint("urn:ts:hello", {
   }],
 }, ({ who }) => `Hello, ${who}!`);
 
-await serve([hello], "/tmp/ts.sock"); // blocks; speaks the wire protocol
+// The socket's directory must be yours and closed to others (see "Security
+// posture"), so not /tmp itself: /tmp/ikigai-<uid> is made 0700 if missing.
+await serve([hello], `/tmp/ikigai-${Deno.uid()}/ts.sock`); // blocks
 ```
 
 Then from a Rust host:
 
 ```sh
-ikigai --mount urn:ts:=/tmp/ts.sock -c 'source urn:ts:hello who=Ada'
+ikigai --mount urn:ts:=/tmp/ikigai-$(id -u)/ts.sock -c 'source urn:ts:hello who=Ada'
 # Hello, Ada!
-ikigai --mount urn:ts:=/tmp/ts.sock -c list
-# urn:ts:hello  → hello   [/tmp/ts.sock]
+ikigai --mount urn:ts:=/tmp/ikigai-$(id -u)/ts.sock -c list
+# urn:ts:hello  → hello   [/tmp/ikigai-1000/ts.sock]
 ```
 
 Or run the packaged demo: `deno run -A examples/demo.ts [socket-path]` — serves
@@ -438,8 +440,8 @@ The worked example is the ikigai book's tic-tac-toe atom,
 keeps everything above it (the platonic cell, lines, board, rules):
 
 ```sh
-deno run -A examples/tictactoe_store.ts /tmp/ttt.sock
-ikigai --override urn:iki:tutorial:ttt:stored:=/tmp/ttt.sock
+deno run -A examples/tictactoe_store.ts /tmp/ikigai-$(id -u)/ttt.sock
+ikigai --override urn:iki:tutorial:ttt:stored:=/tmp/ikigai-$(id -u)/ttt.sock
 # ikigai> sink urn:iki:tutorial:ttt:stored:1:1 X      ok
 # ikigai> source urn:iki:tutorial:ttt:stored:1:1      X  [computed]
 # ikigai> source urn:iki:tutorial:ttt:stored:1:1      X  [cached]
@@ -497,8 +499,8 @@ TypeScript on both ends of the game, with the Rust kernel in the middle:
 composites and the cache, and mounts the Deno store as game `ts`:
 
 ```sh
-deno run -A examples/tictactoe_store.ts /tmp/ttt-store.sock
-ttt-host --socket /tmp/ttt-host.sock --game a --game ts=/tmp/ttt-store.sock
+deno run -A examples/tictactoe_store.ts /tmp/ikigai-$(id -u)/ttt-store.sock
+ttt-host --socket /tmp/ttt-host.sock --game a --game ts=/tmp/ikigai-$(id -u)/ttt-store.sock
 deno run -A examples/tictactoe_app.ts --socket /tmp/ttt-host.sock   # :8071
 # open http://127.0.0.1:8071/game/ts/
 ```
@@ -572,13 +574,15 @@ import { endpoint, Server } from "./src/serve.ts";
 
 const server = new Server(
   [endpoint("urn:ts:hi", {}, () => "hi")],
-  "/tmp/p.sock",
+  "/tmp/ikigai-501/p.sock",
   {
     runtime: nodeRuntime,
   },
 );
 await server.ready; // Node binds asynchronously; under Deno this is immediate
-await using k = await connect("/tmp/p.sock", { runtime: nodeRuntime });
+await using k = await connect("/tmp/ikigai-501/p.sock", {
+  runtime: nodeRuntime,
+});
 ```
 
 `deno task cross-runtime` runs the shared vectors (`failure_class`, `contract`,
@@ -591,12 +595,46 @@ runs on Deno, and the other examples start through `Deno.serve`, `Deno.args` or
 
 ## Security posture
 
-The socket is `0600` in a `0700` directory, and the kernel enforces that mode on
-`connect` (Linux and macOS). **Unlike the Rust and Python servers, this one
-cannot verify the connecting peer's UID**: Deno exposes no
-`SO_PEERCRED`/`LOCAL_PEERCRED` API (and no `getsockopt` at all), so the
-file-permission gate is the whole transport trust story here. Do not serve on a
+The socket is `0600` in a directory only its owner can write. **Unlike the Rust
+and Python servers, this one cannot verify the connecting peer's UID**: Deno
+exposes no `SO_PEERCRED`/`LOCAL_PEERCRED` API (and no `getsockopt` at all), so
+the file permissions are the whole transport trust story here. Do not serve on a
 path whose parent directory other users can traverse.
+
+How `Server` sets the socket up (ledger #3631), with the Deno and Node adapters
+alike:
+
+- **The directories are checked, whether made or found.** Missing directories
+  are created `0700`. The socket's directory must then be owned by the server's
+  uid and not writable by group or others, and every directory above it owned by
+  that uid or root and not writable by group or others unless sticky (as `/tmp`
+  is): whoever can write a directory on the path can rename what is below it.
+  Otherwise `Server` throws `SocketPathRefused`, naming the directory, its owner
+  or mode, and the fix (`chmod 700 <dir>`, or remove it). This is what stops
+  another account that made `/tmp/ikigai-<uid>` first.
+- **A leftover at the path must be our own socket.** It is replaced; a regular
+  file, a directory, a link, or another account's socket is refused by name.
+- **The socket never sits at its path with any other mode.** It is bound in a
+  fresh private `0700` directory beside the path, narrowed to `0600` there, then
+  renamed into place (which also replaces a leftover atomically), and the
+  private directory is removed.
+- **Shutdown removes the path only while it is still this server's socket**
+  (same device and inode). Deno's and Node's own `close` unlink the path they
+  bound, whatever is there by then, so the server does not rely on them.
+
+What a socket's mode gates on `connect`, by OS:
+
+- **Linux** requires write permission on the socket file. Measured
+  (`deno task runtime-test`, which prints it): the owner's own `0000` and `0400`
+  sockets are refused with `EACCES`, `0200` and `0600` accepted.
+- **macOS** is not measured yet: no macOS machine was available for #3631. The
+  same test prints the answer there. Until it is recorded, rely on the directory
+  alone: where a socket's mode is not enforced, the `0700` directory is the
+  whole gate, which is why the directory check refuses a directory others can
+  write.
+- **Windows** is out of scope. There `uid()` is `null`, so the directory and
+  owner checks are skipped and only the private bind and rename run; paths are
+  split on `/` only, and none of it is tested.
 
 **The capability floor is enforced on every call**, as core's kernel enforces
 it: a capability carried on `IssueAs`/`IssueTraced` must satisfy every scope the

@@ -24,7 +24,7 @@
  *            class: "http://www.w3.org/2001/XMLSchema#string" }],
  * }, ({ who }) => `Hello, ${who}!`);
  *
- * await serve([hello], "/tmp/ts.sock");
+ * await serve([hello], `/tmp/ikigai-${Deno.uid()}/ts.sock`);
  * ```
  *
  * A binding = client + servable peer space; the module mechanism IS
@@ -103,7 +103,12 @@ export {
 export type { Args, ArgValue, ClientRun, ConnectOptions } from "./client.ts";
 
 export { defaultRuntime, denoRuntime } from "./runtime.ts";
-export type { Runtime, RuntimeConn, RuntimeListener } from "./runtime.ts";
+export type {
+  Runtime,
+  RuntimeConn,
+  RuntimeListener,
+  RuntimeStat,
+} from "./runtime.ts";
 
 export {
   CONTRACT_PREFIX,
@@ -127,6 +132,7 @@ export {
   serve,
   ServedDef,
   Server,
+  SocketPathRefused,
   Space,
   TemplateError,
   UriTemplate,

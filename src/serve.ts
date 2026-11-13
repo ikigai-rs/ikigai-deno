@@ -105,9 +105,16 @@ import {
   type RuntimeConn,
   type RuntimeListener,
 } from "./runtime.ts";
+import { PlacedSocket } from "./socket_place.ts";
 
+export { SocketPathRefused } from "./socket_place.ts";
 export { TemplateError, UriTemplate } from "./template.ts";
-export type { Runtime, RuntimeConn, RuntimeListener } from "./runtime.ts";
+export type {
+  Runtime,
+  RuntimeConn,
+  RuntimeListener,
+  RuntimeStat,
+} from "./runtime.ts";
 export { checkAction, GIVEN_TWICE } from "./check.ts";
 export type { ProposedArgs, Violation, ViolationKind } from "./check.ts";
 
@@ -2092,14 +2099,22 @@ export class Server {
   readonly space: Space;
   /** The Unix socket path the server listens on. */
   readonly path: string;
+  #socket: PlacedSocket;
   #listener: RuntimeListener;
   #conns = new Set<RuntimeConn>();
   #closing = false;
 
   /**
-   * Bind now, before {@linkcode Server.serve}: creates the parent directory
-   * (`0700`) if missing, REMOVES any file already at `path`, listens, and
-   * narrows the socket to `0600`, which is this server's whole access gate.
+   * Bind now, before {@linkcode Server.serve}. The parent directory is
+   * created (`0700`) if missing, then checked whether made or found: it must
+   * be owned by this process's uid and not writable by group or others, and
+   * every directory above it owned by this uid or root and not writable by
+   * group or others unless sticky (`/tmp`). Anything at `path` but a socket
+   * owned by this uid is refused. Each refusal is a
+   * {@linkcode SocketPathRefused} naming the path and the fix. The socket is
+   * bound in a fresh private `0700` directory beside `path`, narrowed to
+   * `0600` there, and renamed to `path`, so `path` never holds a socket of
+   * any other mode; a leftover socket of ours is replaced by that rename.
    * `options.runtime` is the adapter that does it; default `denoRuntime`.
    */
   constructor(
@@ -2110,22 +2125,14 @@ export class Server {
     const runtime = options.runtime ?? defaultRuntime();
     this.space = new Space(endpoints);
     this.path = path;
-    const slash = path.lastIndexOf("/");
-    if (slash > 0) {
-      runtime.mkdirSync(path.slice(0, slash), { recursive: true, mode: 0o700 });
-    }
-    try {
-      runtime.removeSync(path); // a leftover socket would fail the bind
-    } catch {
-      // absent is fine
-    }
-    this.#listener = runtime.listenUnix(path, 0o600);
+    this.#socket = new PlacedSocket(runtime, path, 0o600);
+    this.#listener = this.#socket.listener;
   }
 
   /**
-   * Resolves once the socket is bound and narrowed to `0600`. Under Deno
-   * that is already true when the constructor returns; an adapter that binds
-   * asynchronously (Node) is listening only after this.
+   * Resolves once the socket is bound, narrowed to `0600` and at its path.
+   * Under Deno that is already true when the constructor returns; an
+   * adapter that binds asynchronously (Node) is listening only after this.
    */
   get ready(): Promise<void> {
     return this.#listener.ready;
@@ -2257,13 +2264,10 @@ export class Server {
   shutdown(): void {
     if (this.#closing) return;
     this.#closing = true;
-    // Closing the listener wakes the accept loop (BadResource) and removes
-    // the socket file; open connections are closed so their read loops end.
-    try {
-      this.#listener.close();
-    } catch {
-      // already closed
-    }
+    // Closing the listener wakes the accept loop (BadResource); the socket
+    // file is removed if it is still ours. Open connections are closed so
+    // their read loops end.
+    this.#socket.close();
     for (const conn of this.#conns) {
       try {
         conn.close();
