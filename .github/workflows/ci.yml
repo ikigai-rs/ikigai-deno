@@ -47,6 +47,18 @@ jobs:
         env:
           TTT_HOST_OPTIONAL: "the interop job runs the parity test"
         run: deno task test
+      # The library runs on Node and Bun through src/runtime_node.ts (ledger
+      # #3627). `--require` makes an absent runtime a failure, so the rows
+      # cannot silently report "absent" here. Pinned to what the spike
+      # measured; move them deliberately.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - name: Cross-runtime (Node and Bun)
+        run: deno task cross-runtime --require
 
   # The real Rust door. The `test` job skips every host-backed test (no binary);
   # this one builds the pinned ikigai-cli, cached by its version, puts it on PATH
