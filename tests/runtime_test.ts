@@ -33,7 +33,11 @@ Deno.test("runtime: no Deno global names the missing adapter", () => {
   // deno-lint-ignore no-explicit-any
   delete (globalThis as any).Deno;
   try {
-    assertThrows(() => defaultRuntime(), Error, "no runtime adapter");
+    assertThrows(
+      () => defaultRuntime(),
+      Error,
+      "ikigai-ts: no runtime adapter",
+    );
   } finally {
     Object.defineProperty(globalThis, "Deno", deno);
   }

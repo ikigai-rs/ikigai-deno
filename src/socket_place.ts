@@ -89,7 +89,7 @@ function checkDirs(runtime: Runtime, dir: string, me: number): void {
     if (st === null || st.kind !== "directory") {
       throw new SocketPathRefused(
         d,
-        `ikigai-deno: refused to ${where}: it is ` +
+        `ikigai-ts: refused to ${where}: it is ` +
           `${st === null ? "missing" : describe(st)}, not a directory.`,
       );
     }
@@ -103,7 +103,7 @@ function checkDirs(runtime: Runtime, dir: string, me: number): void {
         : `Remove ${d}, or serve in a directory of your own.`;
       throw new SocketPathRefused(
         d,
-        `ikigai-deno: refused to ${where}: it is owned by uid ${st.uid}, ` +
+        `ikigai-ts: refused to ${where}: it is owned by uid ${st.uid}, ` +
           `not by this process's uid ${me}, so that account could replace ` +
           `or remove the socket. ${fix}`,
       );
@@ -111,7 +111,7 @@ function checkDirs(runtime: Runtime, dir: string, me: number): void {
     if ((mode & 0o022) !== 0 && (first || (mode & 0o1000) === 0)) {
       throw new SocketPathRefused(
         d,
-        `ikigai-deno: refused to ${where}: its mode is ${octal(mode)}, ` +
+        `ikigai-ts: refused to ${where}: its mode is ${octal(mode)}, ` +
           "writable by group or others, who could replace or remove the " +
           `socket. Run \`chmod 700 ${d}\`, or remove it.`,
       );
@@ -127,14 +127,14 @@ function checkLeftover(runtime: Runtime, path: string, me: number | null) {
   if (st.kind !== "socket") {
     throw new SocketPathRefused(
       path,
-      `ikigai-deno: refused to replace ${path}: it is ${describe(st)}, ` +
+      `ikigai-ts: refused to replace ${path}: it is ${describe(st)}, ` +
         "not a socket. Remove it, or serve on another path.",
     );
   }
   if (me !== null && st.uid !== me) {
     throw new SocketPathRefused(
       path,
-      `ikigai-deno: refused to replace ${path}: it is a socket owned by ` +
+      `ikigai-ts: refused to replace ${path}: it is a socket owned by ` +
         `uid ${st.uid}, not by this process's uid ${me}. Remove it, or ` +
         "serve on another path.",
     );
@@ -177,7 +177,7 @@ export class PlacedSocket {
       this.#cleanup();
       throw new SocketPathRefused(
         this.#private,
-        `ikigai-deno: refused to bind in ${this.#private}: the new private ` +
+        `ikigai-ts: refused to bind in ${this.#private}: the new private ` +
           "directory is not a 0700 directory owned by this process.",
       );
     }

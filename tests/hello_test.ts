@@ -183,7 +183,7 @@ Deno.test("a pre-hello client is refused", async () => {
     await assertRejects(() => stream.readFrame(), EofError);
     conn.close();
   });
-  assert(stderr.includes("refused"), stderr);
+  assert(stderr.includes("ikigai-ts: refused"), stderr);
   assert(stderr.includes("without the version hello"), stderr);
   server.shutdown();
   await serving;

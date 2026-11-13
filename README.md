@@ -751,7 +751,7 @@ record the layout. Highlights a public ABI document should state:
 
 ## Accessibility
 
-[ACCESSIBILITY.md](https://github.com/ikigai-rs/ikigai-deno/blob/main/ACCESSIBILITY.md)
+[ACCESSIBILITY.md](https://github.com/ikigai-rs/ikigai-ts/blob/main/ACCESSIBILITY.md)
 says what this package and its examples emit that people read (error messages,
 the plain-text description, the examples' pages), the rules that output follows,
 what is tested, the known limitations, and how to report a barrier.
