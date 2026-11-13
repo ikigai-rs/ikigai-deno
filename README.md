@@ -1,12 +1,12 @@
-# ikigai-deno
+# @ikigai/ts
 
-A TypeScript (Deno-first) client and servable peer for the
+A TypeScript client and servable peer for Deno, Node and Bun, speaking the
 [ikigai](https://github.com/ikigai-rs) wire protocol over Unix domain sockets.
-This is **L0** of the polyglot ladder: no Rust, no core changes — a Deno process
-can _drive_ a running ikigai kernel, and a Deno process can _be_ resources that
-a Rust host mounts. It is the third implementation of the wire, sibling of
-[ikigai-python](https://github.com/ikigai-rs/ikigai-python), and the first born
-after the codec became a versioned public ABI.
+This is **L0** of the polyglot ladder: no Rust, no core changes — a TypeScript
+process can _drive_ a running ikigai kernel, and a TypeScript process can _be_
+resources that a Rust host mounts. It is the third implementation of the wire,
+sibling of [ikigai-python](https://github.com/ikigai-rs/ikigai-python), and the
+first born after the codec became a versioned public ABI.
 
 A binding = client + servable peer space; the module mechanism IS
 mount-over-wire.
@@ -25,10 +25,25 @@ host.
 
 ## Install
 
-Nothing to install: Deno imports by specifier. The package has **one runtime
-dependency**, [`jsr:@std/crypto`](https://jsr.io/@std/crypto) (`^1.0.0`), for
-BLAKE3 — and it is no longer zero-dependency because of it. A served peer's
-Turtle Meta face names each verb's contract by its content,
+JSR is the only publish target. Once the package is published, add it with the
+command for your runtime:
+
+```sh
+deno add jsr:@ikigai/ts
+```
+
+```sh
+npx jsr add @ikigai/ts
+```
+
+```sh
+bunx jsr add @ikigai/ts
+```
+
+Node and Bun use the runtime adapter shown in [Runtimes](#runtimes). The package
+has **one runtime dependency**, [`jsr:@std/crypto`](https://jsr.io/@std/crypto)
+(`^1.0.0`), for BLAKE3 — and it is no longer zero-dependency because of it. A
+served peer's Turtle Meta face names each verb's contract by its content,
 `urn:ikigai:contract:{id}:{verb}:b3:{hex}`, exactly as `ikigai-core` does
 (ikigai ledger items 948 and 1034): that IRI is what a Rust host's action
 manifold joins its rows to, so the digest has to be core's BLAKE3 to the byte,
@@ -53,7 +68,7 @@ import { connect, endpoint, serve } from "./src/mod.ts";
 
 ### HTML escaping and URL rules (`./html`)
 
-`src/html.ts` (`@ikigai/deno/html`, zero dependencies) ports `ikigai_fn::html`:
+`src/html.ts` (`@ikigai/ts/html`, zero dependencies) ports `ikigai_fn::html`:
 `htmlText`, `attr`, `urlSegment`, `safeHref` (the trimmed target, or `null` for
 "not a link"), `jsonAttr`, and the strict decoders `percentDecode` (text, UTF-8
 checked) and `percentDecodeBytes`, which throw a `PercentDecodeError` whose
@@ -70,7 +85,7 @@ aebf30a (PR 35; ledger #1813, ledger #2838, ledger #2883).
 
 ### Authorization headers and base64 (`./auth`)
 
-`src/auth.ts` (`@ikigai/deno/auth`, zero dependencies) ports `ikigai_http::auth`
+`src/auth.ts` (`@ikigai/ts/auth`, zero dependencies) ports `ikigai_http::auth`
 and `ikigai_http::base64`: `basicAuthorization` (RFC 7617),
 `bearerAuthorization` (RFC 6750), `parseAuthorization`, `base64Encode` and
 `base64Decode` (padding required, canonical pad bits). A refusal throws an
@@ -85,8 +100,8 @@ The published surface is exactly six entrypoints — `.` (`src/mod.ts`), `./wire
 `./client`, `./serve`, `./html` and `./auth`. **`./zod` is left out of `exports`
 for good** (decided in ledger #1350): its signatures name zod's own types, which
 `deno doc --lint` reports as `private-type-ref`, so it is not part of the
-published API and no `@ikigai/deno/zod` specifier will be offered. The file
-stays in the tree and is importable **by path** (`./src/zod.ts`), so the
+published API and no `@ikigai/ts/zod` specifier will be offered. The file stays
+in the tree and is importable **by path** (`./src/zod.ts`), so the
 `zod → ArgSpec` rung below keeps working.
 
 `deno publish --dry-run` (the `publish-check` task) is what keeps this honest:
@@ -169,7 +184,7 @@ rather than a failure.
 ## Client (the script front door)
 
 ```ts
-import { connect } from "@ikigai/deno";
+import { connect } from "@ikigai/ts";
 
 await using k = await connect(); // default socket path, same as the Rust CLI
 const rep = await k.source("urn:iki:fn:toUpper", { in: "hi" });
@@ -225,7 +240,7 @@ Notes:
 ## Serve (the peer-module seed)
 
 ```ts
-import { endpoint, serve } from "@ikigai/deno";
+import { endpoint, serve } from "@ikigai/ts";
 
 const hello = endpoint("urn:ts:hello", {
   summary: "Greet someone",
@@ -354,7 +369,7 @@ matches, and each `{variable}` reaches the handler by name, beside the
 arguments:
 
 ```ts
-import { endpoint } from "@ikigai/deno";
+import { endpoint } from "@ikigai/ts";
 
 const echo = endpoint("urn:ts:echo:{msg}", {
   bindings: { msg: { summary: "what to say" } },
@@ -365,7 +380,7 @@ const echo = endpoint("urn:ts:echo:{msg}", {
 `ActionSpec`. `family()` returns a builder; chain the verbs it answers:
 
 ```ts
-import { family, NotFoundError } from "@ikigai/deno";
+import { family, NotFoundError } from "@ikigai/ts";
 
 const marks = new Map<string, string>();
 const cell = family("urn:ts:stored:{x}:{y}", { id: "stored" })
@@ -559,7 +574,7 @@ cells it sourced) would be a traccessor — its answer would depend on reads the
 host never saw it make, so nothing could ever cut it. The rules stay resources
 in the kernel; the app only fills templates with their answers.
 
-## Runtimes (spike, ledger #3627)
+## Runtimes
 
 Only the socket, listener, file and environment calls need a runtime, and they
 sit behind one interface, `Runtime` (`src/runtime.ts`). `denoRuntime` is the
@@ -589,9 +604,21 @@ await using k = await connect("/tmp/ikigai-501/p.sock", {
 `capability`, `html`, `auth`) and the adapter's socket checks under Deno, Node
 and Bun. `deno test -A` runs the Node and Bun rows for whichever of `node` and
 `bun` are on `PATH` (`tests/cross_runtime_test.ts`), and reports a missing one
-as absent instead of failing. The examples are still Deno programs: Fresh only
-runs on Deno, and the other examples start through `Deno.serve`, `Deno.args` or
-`Deno.env`.
+as absent instead of failing. `deno task cross-runtime --require` requires all
+three runtimes.
+
+The checked-in examples and README launch commands are Deno-only:
+
+| Examples                                        | Runtime | Deno-specific entry points                             |
+| ----------------------------------------------- | ------- | ------------------------------------------------------ |
+| `demo.ts`, `endpoints.ts`, `tictactoe_store.ts` | Deno    | `Deno.args`, `Deno.addSignalListener`                  |
+| `hono_app.ts`                                   | Deno    | `Deno.env`, `Deno.serve`                               |
+| `oak_app.ts`                                    | Deno    | `Deno.env`                                             |
+| `fresh_app.ts`                                  | Deno    | Fresh requires Deno; `Deno.env`                        |
+| `tictactoe_app.ts`                              | Deno    | `Deno.args`, `Deno.env`, `Deno.readFile`, `Deno.serve` |
+
+The library's shared vectors and socket checks run under Deno, Node and Bun;
+these example launchers have not been ported to Node or Bun.
 
 ## Security posture
 

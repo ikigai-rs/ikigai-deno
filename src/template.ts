@@ -31,7 +31,7 @@
  * answers — `EndpointSpace`'s rule (bindings are tried in the order bound).
  *
  * ```ts
- * import { UriTemplate } from "@ikigai/deno/serve";
+ * import { UriTemplate } from "@ikigai/ts/serve";
  * const t = UriTemplate.parse("urn:iki:tutorial:ttt:stored:{x}:{y}");
  * t.match("urn:iki:tutorial:ttt:stored:1:-2"); // { x: "1", y: "-2" }
  * t.match("urn:iki:tutorial:ttt:stored:1:");   // null (empty capture)

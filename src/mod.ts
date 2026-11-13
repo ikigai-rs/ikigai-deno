@@ -6,7 +6,7 @@
  * *drive* a running ikigai kernel:
  *
  * ```ts
- * import { connect } from "@ikigai/deno";
+ * import { connect } from "@ikigai/ts";
  *
  * await using k = await connect();
  * const rep = await k.source("urn:iki:fn:toUpper", { in: "hi" });
@@ -16,7 +16,7 @@
  * …and a Deno process can *be* resources that a Rust host mounts:
  *
  * ```ts
- * import { endpoint, serve } from "@ikigai/deno";
+ * import { endpoint, serve } from "@ikigai/ts";
  *
  * const hello = endpoint("urn:ts:hello", {
  *   summary: "Greet someone",

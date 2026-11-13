@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — package renamed to `@ikigai/ts` (ledger #3632)
+
+- Rename the unpublished JSR package to `@ikigai/ts` to reflect support for
+  Deno, Node and Bun. Update installation instructions and import examples; the
+  six exports stay the same. No compatibility alias is added.
+- The GitHub repository name and its URLs stay `ikigai-deno` pending a separate
+  repository rename.
+
 ## Unreleased — the socket is bound privately; its directories are checked (ledger #3631)
 
 - `Server` binds its socket in a fresh private `0700` directory beside the path,
@@ -39,9 +47,9 @@
 - The JSR `license` field is `MIT`: JSR accepts one SPDX identifier and refused
   the expression `MIT OR Apache-2.0` at publish. The package stays MIT OR
   Apache-2.0 at your option, and both license texts ship in it.
-- The JSR package is named `@ikigai/deno` (it was `@ikigai/wire` in the
-  manifest; it has never been published under either name). The repository is
-  `ikigai-deno` and the scope already says `ikigai`.
+- The JSR package name was revised from `@ikigai/wire` before publication
+  (superseded by the Unreleased rename to `@ikigai/ts` above). The package has
+  never been published. The repository is `ikigai-deno`.
 - Add `existenceSensitive` to `EndpointOptions`, `FamilyOptions`, and
   `ActionOptions` (including Source and Exists). The flag defaults to false and
   reaches the description and each verb's contract. Explicit actions replace the
