@@ -12,7 +12,7 @@ conformance claim. Adapted from the
 | Status           | Evaluation in progress. No conformance claim.                                                                                                                                                                                                                      |
 | Owner            | the maintainers of this repository                                                                                                                                                                                                                                 |
 | Report a barrier | [a GitHub issue](https://github.com/ikigai-rs/ikigai-deno/issues/new?labels=accessibility) with the `accessibility` label; anything security-sensitive through [private vulnerability reporting](https://github.com/ikigai-rs/ikigai-deno/security/advisories/new) |
-| Last reviewed    | 2026-11-07                                                                                                                                                                                                                                                         |
+| Last reviewed    | 2026-11-13                                                                                                                                                                                                                                                         |
 
 ## What it emits that people read
 
@@ -75,38 +75,59 @@ sends, which this package carries unchanged.
   be announced without moving focus.
 - **No color is written** anywhere in the library or the console line.
 
-The tic-tac-toe page shell's `lang`, `main` and `nav` and the stylesheet's
-contrast are followed by reading; the tests below pin the rest.
+These are implementation rules, not evidence of accessibility. The results below
+distinguish automated assertions from checks that have not run.
 
 ## How it is tested
 
-- `tests/failure_class_test.ts` (`failure vectors: …`, one test per case) pins
-  every typed error's `display()` against `tests/failure_class_vectors.json`, a
-  verbatim copy of the vectors the Rust kernel's vocabulary crate commits;
-  `tests/tictactoe_app_test.ts`
-  (`a refusal reads as the Rust kernel's Display prints it`) pins the same forms
-  where the example shows them.
-- `tests/auth_test.ts` (`an AuthError never carries the credential`, and the
-  refusal vectors) pins the auth errors.
-- `tests/family_test.ts` (`flat endpoint over a template: …`) pins two input
-  lines of the plain-text description.
-- `tests/html_test.ts` pins the escaping, link and percent-decoding rules and
-  form parsing against `tests/html_vectors.json`, and the `PercentDecodeError`
-  and `FormPairsError` messages; `tests/tictactoe_app_test.ts` pins that the
-  page loads `conflict.js`, that it writes with `textContent` and never
-  `innerHTML`, that a hostile mark is escaped, and the sha256 of the vendored
-  stylesheets.
-- `tests/examples_fresh_test.ts` pins the language and main landmark on the
-  index and catalog pages, each input's visible label and unique id, and the
-  polite live region for each form's result target.
-- **No automated accessibility checker, browser or assistive technology has been
-  used on this output.** No test pins the tic-tac-toe page shell's `lang`,
-  `main` or `nav`, and the stylesheet's contrast is a comment, not a measurement
-  made here.
+Every named check has a result: Pass, Fail or Blocked, with evidence. A Pass
+covers only the stated assertions, not overall accessibility or WCAG
+conformance. An unrun check is Blocked. A historical run that CI does not repeat
+must be Blocked with its date, not carried forward as Pass.
+
+The automated checks below ran on 2026-11-13 with Deno 2.9.7 (V8
+15.0.245.2-rusty, TypeScript 6.0.3), on main commit
+[`a3dfdbd`](https://github.com/ikigai-rs/ikigai-deno/commit/a3dfdbd49e28e9f22805d3c33440be9e7b9729cd),
+before this documentation change. Command:
+
+```sh
+deno test -A tests/failure_class_test.ts tests/auth_test.ts tests/family_test.ts tests/html_test.ts tests/tictactoe_app_test.ts tests/examples_fresh_test.ts
+```
+
+Result: 105 passed, 0 failed, 1 ignored. These suites run in CI's `test` job;
+Rust-host parity is separate in `interop`. The tests assert strings, markup and
+protocol behavior; they do not render pages or establish usability with
+assistive technology. The results format follows
+[gonk-starter PR 91](https://github.com/ikigai-rs/ikigai-gonk-starter/pull/91).
+
+| Check                                                                         | Result  | Evidence                                                                                                                                                                                                                                            |
+| ----------------------------------------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Typed failure wording matches shared vectors                                  | Pass    | Command and Deno version above; `tests/failure_class_test.ts` compares typed failures with `tests/failure_class_vectors.json`; `tests/tictactoe_app_test.ts` checks refusal display forms. Does not assess whether the words help a person recover. |
+| Auth refusal wording and credential exclusion                                 | Pass    | Command above; `tests/auth_test.ts`, including `an AuthError never carries the credential`, checks refusal vectors and credential exclusion. Does not test every caller's handling of errors.                                                       |
+| Plain-text description input lines                                            | Pass    | Command above; `tests/family_test.ts`, `flat endpoint over a template: …`, checks required binding and optional argument lines. Does not assess the whole description's readability.                                                                |
+| HTML escaping, link targets, percent-decoding and form errors                 | Pass    | Command above; `tests/html_test.ts` checks helpers and error messages against `tests/html_vectors.json`; `tests/tictactoe_app_test.ts` checks hostile-mark escaping. Does not evaluate rendered HTML.                                               |
+| Refused move inserted as text                                                 | Pass    | Command above; `tests/tictactoe_app_test.ts` checks loading `conflict.js`, use of `textContent` rather than `innerHTML`, and refusal responses. Does not verify a screen reader announcement or browser focus behavior.                             |
+| Vendored stylesheet and script integrity                                      | Pass    | Command above; `tests/tictactoe_app_test.ts` checks sha256 hashes of vendored assets. Byte identity does not establish contrast or accessibility.                                                                                                   |
+| Fresh language, main landmark, input labels and live-result markup            | Pass    | Command above; `tests/examples_fresh_test.ts` checks index and catalog language/main markup and each index form's visible label, unique input id and polite result target. Does not verify accessible names or announcements in a browser.          |
+| Decode and protocol errors explain recovery                                   | Fail    | Source review on 2026-11-13: `src/postcard.ts` still emits `varint too long`; `src/client.ts` emits `unexpected reply to …` without a recovery instruction. A wording limitation, not a determination of WCAG failure.                              |
+| Description provides text after every input colon                             | Fail    | Command above; `tests/family_test.ts` explicitly asserts `input suffix [argument] (optional):` with no summary. Confirms the known readability limitation; the regression test itself passes.                                                       |
+| Tic-tac-toe shell language, title, viewport, headings, main and navigation    | Blocked | Present in `examples/tictactoe_app.ts` by source reading; no dedicated assertions or browser evaluation of these shell features were run.                                                                                                           |
+| Text and link contrast (4.5:1), rule contrast (3:1), light and dark themes    | Blocked | `examples/tictactoe_static/host.css` states these thresholds in a comment. No contrast measurement was run; asset hashes do not measure contrast.                                                                                                   |
+| Library and console meaning independent of color; version-refusal instruction | Blocked | Source rules above describe plain text and `Update the client.` in `src/serve.ts`; no dedicated accessibility check of console output was run.                                                                                                      |
+| Rust-host tic-tac-toe parity                                                  | Blocked | The command above ignored the parity test because no `ttt-host` binary was available. CI's `interop` job builds the pinned host and runs parity; local results do not establish that parity.                                                        |
+| Browser rendering, zoom, 320 px reflow and theme behavior                     | Blocked | No browser evaluation was run for this review; no browser accessibility harness is configured here.                                                                                                                                                 |
+| Manual keyboard navigation, focus visibility and focus after updates          | Blocked | No person performed a keyboard pass; no interactive browser session was available for this review.                                                                                                                                                  |
+| Automated accessibility checker                                               | Blocked | No axe or other browser accessibility checker was run; none is configured in this repository's CI.                                                                                                                                                  |
+| Screen reader                                                                 | Blocked | No screen reader session was available or used for this review. Live-region markup tests do not verify announcements.                                                                                                                               |
+| Screen magnifier                                                              | Blocked | No magnifier session was available or used for this review.                                                                                                                                                                                         |
+| Speech input                                                                  | Blocked | No speech-input session was available or used for this review.                                                                                                                                                                                      |
+| Switch access                                                                 | Blocked | No switch-access session was available or used for this review.                                                                                                                                                                                     |
+| Braille display                                                               | Blocked | No braille display was available or used for this review.                                                                                                                                                                                           |
 
 ## Known limitations
 
-Found by reading the source on 2026-10-31, not by testing with people or
+Found by reading the source on 2026-10-31 and confirmed on 2026-11-13 by source
+review and the description regression test above, not by testing with people or
 assistive technology:
 
 - Decode and protocol errors are fragments that do not say what to do
@@ -120,8 +141,11 @@ assistive technology:
 Read this file before changing any output listed above: an error's words, the
 description face, the console line, or an example's page. Keep meaning in words,
 keep `display()` equal to the shared vectors, and keep the page shell's `lang`,
-`main` and headings. Say in the pull request what was tested, with what, and
-what was not.
+`main` and headings. In the pull request, give each accessibility check a
+`Check | Result | Evidence` row with Pass, Fail or Blocked, the command or test
+and tool version, or why it could not run. Keep unrun assistive-technology
+checks as Blocked. State the scope of each Pass; retain dates for historical
+runs that CI does not repeat as Blocked.
 
 ## Reporting a barrier
 
@@ -135,7 +159,8 @@ sharing them. Anything security-sensitive goes through
 
 ## Change history
 
-| Date       | Change                                                                                          |
-| ---------- | ----------------------------------------------------------------------------------------------- |
-| 2026-10-31 | First version.                                                                                  |
-| 2026-11-07 | Added Fresh page landmarks, input labels and polite live result regions, with regression tests. |
+| Date       | Change                                                                                                                   |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------ |
+| 2026-10-31 | First version.                                                                                                           |
+| 2026-11-07 | Added Fresh page landmarks, input labels and polite live result regions, with regression tests.                          |
+| 2026-11-13 | Recorded scoped Pass / Fail / Blocked results, baseline test evidence and unrun browser and assistive-technology checks. |
