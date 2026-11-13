@@ -156,7 +156,7 @@ export const denoRuntime: Runtime = {
 export function defaultRuntime(): Runtime {
   if (typeof Deno === "undefined") {
     throw new Error(
-      "ikigai-deno: no runtime adapter outside Deno; pass one, e.g. " +
+      "ikigai-ts: no runtime adapter outside Deno; pass one, e.g. " +
         "`{ runtime: nodeRuntime }` from src/runtime_node.ts",
     );
   }

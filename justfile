@@ -1,4 +1,4 @@
-# ikigai-deno local gates.
+# ikigai-ts local gates: a TypeScript client and servable peer for Deno, Node and Bun.
 #
 # `just gates` runs exactly what .github/workflows/ci.yml runs, in the same order:
 # `deno fmt --check`, `deno lint`, `deno check` over the entry points and examples,

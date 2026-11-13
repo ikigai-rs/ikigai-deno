@@ -2185,7 +2185,7 @@ export class Server {
     const hello = wire.decodeHello(first);
     if (hello === null) {
       console.error(
-        "ikigai-deno: refused a client that connected without the version " +
+        "ikigai-ts: refused a client that connected without the version " +
           `hello (wire <= v5; v${wire.PROTOCOL_VERSION} requires it). ` +
           "Update the client.",
       );

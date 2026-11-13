@@ -1,18 +1,18 @@
 # Accessibility
 
-What `ikigai-deno` emits that people read (error messages, a plain-text
+What `ikigai-ts` emits that people read (error messages, a plain-text
 description face, one console line, and the HTML of its examples), the rules
 that output follows, how it is tested, and how to report a barrier. It is not a
 conformance claim. Adapted from the
 [ACCESSIBILITY.md template](https://github.com/mgifford/ACCESSIBILITY.md) (MIT).
 
-| Field            | Value                                                                                                                                                                                                                                                              |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Target           | WCAG 2.2 Level AA for the HTML this repository's examples write; the published library writes text only                                                                                                                                                            |
-| Status           | Evaluation in progress. No conformance claim.                                                                                                                                                                                                                      |
-| Owner            | the maintainers of this repository                                                                                                                                                                                                                                 |
-| Report a barrier | [a GitHub issue](https://github.com/ikigai-rs/ikigai-deno/issues/new?labels=accessibility) with the `accessibility` label; anything security-sensitive through [private vulnerability reporting](https://github.com/ikigai-rs/ikigai-deno/security/advisories/new) |
-| Last reviewed    | 2026-11-13                                                                                                                                                                                                                                                         |
+| Field            | Value                                                                                                                                                                                                                                                          |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Target           | WCAG 2.2 Level AA for the HTML this repository's examples write; the published library writes text only                                                                                                                                                        |
+| Status           | Evaluation in progress. No conformance claim.                                                                                                                                                                                                                  |
+| Owner            | the maintainers of this repository                                                                                                                                                                                                                             |
+| Report a barrier | [a GitHub issue](https://github.com/ikigai-rs/ikigai-ts/issues/new?labels=accessibility) with the `accessibility` label; anything security-sensitive through [private vulnerability reporting](https://github.com/ikigai-rs/ikigai-ts/security/advisories/new) |
+| Last reviewed    | 2026-11-13                                                                                                                                                                                                                                                     |
 
 ## What it emits that people read
 
@@ -90,7 +90,7 @@ must be Blocked with its date, not carried forward as Pass.
 
 The automated checks below ran on 2026-11-13 with Deno 2.9.7 (V8
 15.0.245.2-rusty, TypeScript 6.0.3), on main commit
-[`a3dfdbd`](https://github.com/ikigai-rs/ikigai-deno/commit/a3dfdbd49e28e9f22805d3c33440be9e7b9729cd),
+[`a3dfdbd`](https://github.com/ikigai-rs/ikigai-ts/commit/a3dfdbd49e28e9f22805d3c33440be9e7b9729cd),
 before this documentation change. Command:
 
 ```sh
@@ -152,18 +152,19 @@ runs that CI does not repeat as Blocked.
 
 ## Reporting a barrier
 
-[Open an issue](https://github.com/ikigai-rs/ikigai-deno/issues/new?labels=accessibility)
+[Open an issue](https://github.com/ikigai-rs/ikigai-ts/issues/new?labels=accessibility)
 with the `accessibility` label (the link sets it when GitHub lets you add
 labels; otherwise a maintainer adds it): what you were doing, what happened, and
 your browser or terminal and any assistive technology, if you are comfortable
 sharing them. Anything security-sensitive goes through
-[private vulnerability reporting](https://github.com/ikigai-rs/ikigai-deno/security/advisories/new).
+[private vulnerability reporting](https://github.com/ikigai-rs/ikigai-ts/security/advisories/new).
 **We acknowledge a report within 7 days**, and promise nothing further.
 
 ## Change history
 
-| Date       | Change                                                                                                                   |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------ |
-| 2026-10-31 | First version.                                                                                                           |
-| 2026-11-07 | Added Fresh page landmarks, input labels and polite live result regions, with regression tests.                          |
-| 2026-11-13 | Recorded scoped Pass / Fail / Blocked results, baseline test evidence and unrun browser and assistive-technology checks. |
+| Date       | Change                                                                                                                                    |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-31 | First version.                                                                                                                            |
+| 2026-11-07 | Added Fresh page landmarks, input labels and polite live result regions, with regression tests.                                           |
+| 2026-11-13 | Recorded scoped Pass / Fail / Blocked results, baseline test evidence and unrun browser and assistive-technology checks.                  |
+| 2026-11-13 | Renamed runtime, socket refusal and version-refusal message prefixes and the demo console label to `ikigai-ts`; updated repository links. |

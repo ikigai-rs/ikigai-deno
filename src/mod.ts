@@ -1,6 +1,6 @@
 /**
- * ikigai-deno: a TypeScript (Deno-first) client and servable
- * peer for the ikigai wire protocol over Unix domain sockets.
+ * ikigai-ts: a TypeScript client and servable peer for Deno, Node and Bun
+ * speaking the ikigai wire protocol over Unix domain sockets.
  *
  * L0 of the polyglot ladder — no Rust, no core changes. A Deno process can
  * *drive* a running ikigai kernel:

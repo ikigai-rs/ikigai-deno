@@ -1,7 +1,8 @@
 /**
  * JSR readiness is kept ready (ledger #1364).
  *
- * ikigai-deno is not on JSR yet — publishing stays Brian's — but the package
+ * ikigai-ts, a TypeScript client and servable peer for Deno, Node and Bun,
+ * is not on JSR yet — publishing stays Brian's — but the package
  * must stay publishable, and CI must say so on every change. Two gates, run
  * here so the existing CI `Test` step (`deno test -A`) exercises them:
  *

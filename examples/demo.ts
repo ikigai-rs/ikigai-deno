@@ -52,7 +52,7 @@ if (import.meta.main) {
   const path = Deno.args[0] ??
     defaultSocketPath().replace(/kernel\.sock$/, "ts.sock");
   console.error(
-    `ikigai-deno demo: serving urn:ts:hello, urn:ts:shout on ${path}`,
+    `ikigai-ts demo: serving urn:ts:hello, urn:ts:shout on ${path}`,
   );
   console.error(
     `try:  ikigai --mount urn:ts:=${path} -c 'source urn:ts:hello who=Ada'`,

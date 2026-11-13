@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — repository naming follows `ikigai-ts` (ledger #3663)
+
+- Update repository links and descriptions for the renamed `ikigai-rs/ikigai-ts`
+  repository and its support for Deno, Node and Bun. Runtime, socket refusal and
+  version-refusal messages and the demo console label now use `ikigai-ts`.
+
 ## Unreleased — package renamed to `@ikigai/ts` (ledger #3632)
 
 - Rename the unpublished JSR package to `@ikigai/ts` to reflect support for

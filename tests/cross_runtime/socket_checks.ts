@@ -100,6 +100,7 @@ async function assertRefused(
   } catch (e) {
     assert(e instanceof Error, String(e));
     assertEquals(e.name, "SocketPathRefused", e.message);
+    assertStringIncludes(e.message, "ikigai-ts: refused to");
     assertEquals((e as Error & { path: string }).path, named);
     assertStringIncludes(e.message, named);
     assertStringIncludes(e.message, words);
