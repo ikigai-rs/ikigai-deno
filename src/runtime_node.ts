@@ -20,7 +20,12 @@
 import * as fs from "node:fs";
 import * as net from "node:net";
 import process from "node:process";
-import type { Runtime, RuntimeConn, RuntimeListener } from "./runtime.ts";
+import type {
+  Runtime,
+  RuntimeConn,
+  RuntimeListener,
+  RuntimeStat,
+} from "./runtime.ts";
 
 /**
  * A `net.Socket` as a pull-based {@linkcode RuntimeConn}: data is buffered
@@ -102,7 +107,7 @@ class NodeListener implements RuntimeListener {
   }[] = [];
   #failure: Error | null = null;
 
-  constructor(path: string, mode: number) {
+  constructor(path: string, mode: number, onBound?: () => void) {
     this.#server = net.createServer((socket) => {
       const waiter = this.#waiters.shift();
       if (waiter) waiter.resolve(new NodeConn(socket));
@@ -117,6 +122,7 @@ class NodeListener implements RuntimeListener {
         try {
           // Node binds with the process umask too; narrow it, the gate.
           fs.chmodSync(path, mode);
+          onBound?.();
           resolve();
         } catch (e) {
           this.close();
@@ -144,7 +150,8 @@ class NodeListener implements RuntimeListener {
   }
 
   close(): void {
-    // Closing a Unix-socket server unlinks its file, as Deno's close does.
+    // Closing a Unix-socket server unlinks the path it BOUND, as Deno's
+    // close does; the server removes its final path itself.
     this.#server.close();
     for (const socket of this.#queue.splice(0)) socket.destroy();
     this.#fail(new Error("listener closed"));
@@ -162,11 +169,41 @@ export const nodeRuntime: Runtime = {
         resolve(new NodeConn(socket));
       });
     }),
-  listenUnix: (path, mode) => new NodeListener(path, mode),
-  mkdirSync: (path, options) => {
-    fs.mkdirSync(path, options);
+  listenUnix: (path, mode, onBound) => new NodeListener(path, mode, onBound),
+  mkdirSync: (path, mode) => {
+    fs.mkdirSync(path, { mode });
   },
-  removeSync: (path) => fs.rmSync(path),
+  makeTempDirSync: (dir, prefix) => fs.mkdtempSync(`${dir}/${prefix}`),
+  lstatSync(path): RuntimeStat | null {
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(path);
+    } catch (e) {
+      if ((e as { code?: string }).code === "ENOENT") return null;
+      throw e;
+    }
+    return {
+      kind: st.isSymbolicLink()
+        ? "symlink"
+        : st.isDirectory()
+        ? "directory"
+        : st.isFile()
+        ? "file"
+        : st.isSocket()
+        ? "socket"
+        : "other",
+      uid: process.platform === "win32" ? null : st.uid,
+      mode: process.platform === "win32" ? null : st.mode,
+      dev: st.dev,
+      ino: process.platform === "win32" ? null : st.ino,
+    };
+  },
+  realPathSync: (path) => fs.realpathSync(path),
+  renameSync: (from, to) => fs.renameSync(from, to),
+  removeSync(path) {
+    if (fs.lstatSync(path).isDirectory()) fs.rmdirSync(path);
+    else fs.unlinkSync(path);
+  },
   env: (name) => process.env[name],
   uid: () => process.getuid?.() ?? null,
 };

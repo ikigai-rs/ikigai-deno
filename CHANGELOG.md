@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — the socket is bound privately; its directories are checked (ledger #3631)
+
+- `Server` binds its socket in a fresh private `0700` directory beside the path,
+  narrows it to `0600` there and renames it into place, so the path never holds
+  a socket with the umask's mode. Shutdown removes the path only while it is
+  still that socket (same device and inode).
+- The socket's directory, made or found, must be owned by the server's uid and
+  not writable by group or others; each directory above it must be owned by that
+  uid or root and not writable by group or others unless sticky. A leftover at
+  the path is replaced only when it is a socket owned by the server's uid.
+  Anything else throws the new `SocketPathRefused`, which names the path, what
+  is wrong and the fix. A regular file at the path used to be removed; it is now
+  refused.
+- `Runtime` gains `lstatSync`, `realPathSync`, `renameSync` and
+  `makeTempDirSync`; `mkdirSync(path, mode)` makes one directory; `removeSync`
+  also removes an empty directory; `listenUnix` takes an `onBound` callback that
+  runs after the socket is narrowed and before `ready` resolves. `RuntimeStat`
+  is exported.
+
 ## Unreleased — a runtime adapter for Deno, Node and Bun (spike, ledger #3627)
 
 - The client's and server's socket, listener, file and environment calls go

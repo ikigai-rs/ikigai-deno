@@ -46,8 +46,8 @@ Each app reads the kernel socket path from `IKIGAI_SOCKET`, defaulting to
 Point an app straight at a served Deno space:
 
 ```sh
-deno run -A examples/endpoints.ts /tmp/ts-examples.sock &
-IKIGAI_SOCKET=/tmp/ts-examples.sock deno run -A examples/hono_app.ts
+deno run -A examples/endpoints.ts /tmp/ikigai-$(id -u)/ts-examples.sock &
+IKIGAI_SOCKET=/tmp/ikigai-$(id -u)/ts-examples.sock deno run -A examples/hono_app.ts
 # …or examples/oak_app.ts, or examples/fresh_app.ts
 curl localhost:8000/hello/Ada          # Hello, Ada!
 curl 'localhost:8000/upper?text=roc'   # ROC   (X-Ikigai-Cache: MISS every time)
@@ -64,8 +64,8 @@ traverses **Deno app → Rust kernel → mount → Deno peer**, and the kernel c
 the pure results:
 
 ```sh
-deno run -A examples/endpoints.ts /tmp/ts-examples.sock &
-ikigai serve /tmp/kernel.sock --prefer urn:ts:=/tmp/ts-examples.sock &
+deno run -A examples/endpoints.ts /tmp/ikigai-$(id -u)/ts-examples.sock &
+ikigai serve /tmp/kernel.sock --prefer urn:ts:=/tmp/ikigai-$(id -u)/ts-examples.sock &
 IKIGAI_SOCKET=/tmp/kernel.sock deno run -A examples/hono_app.ts
 curl -i 'localhost:8000/upper?text=roc'   # X-Ikigai-Cache: MISS
 curl -i 'localhost:8000/upper?text=roc'   # X-Ikigai-Cache: HIT — the kernel cached the peer's result

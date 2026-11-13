@@ -26,8 +26,11 @@ The published library (`src/`):
   (`bearer-token-syntax: a bearer token must be a non-empty RFC 6750 b64token`);
   and the protocol, decode and template errors (`ProtocolError`, `DecodeError`
   in `src/postcard.ts`, `TemplateError` in `src/template.ts`);
-  `PercentDecodeError` in `src/html.ts`, whose message is the Rust
-  `PercentDecodeError`'s `Display`
+  `SocketPathRefused` in `src/socket_place.ts`, a sentence naming the refused
+  path, what is wrong with it (its owner's uid, its mode in octal, or what it is
+  instead of a socket) and what to do
+  (``Run `chmod 700 <dir>`, or remove it.``); `PercentDecodeError` in
+  `src/html.ts`, whose message is the Rust `PercentDecodeError`'s `Display`
   (`percent_decode: malformed percent-escape at byte 2`). `FormPairsError` in
   the same module keeps Rust's form error message and the original input byte
   offset (`form_pairs: decoded bytes are not UTF-8 at byte 2`).
