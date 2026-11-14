@@ -652,13 +652,13 @@ alike:
 What a socket's mode gates on `connect`, by OS:
 
 - **Linux** requires write permission on the socket file. Measured
-  (`deno task runtime-test`, which prints it): the owner's own `0000` and `0400`
-  sockets are refused with `EACCES`, `0200` and `0600` accepted.
-- **macOS** is not measured yet: no macOS machine was available for #3631. The
-  same test prints the answer there. Until it is recorded, rely on the directory
-  alone: where a socket's mode is not enforced, the `0700` directory is the
-  whole gate, which is why the directory check refuses a directory others can
-  write.
+  (`deno task runtime-test`, which prints it and pins it): the owner's own
+  `0000` and `0400` sockets are refused with `EACCES`, `0200` and `0600`
+  accepted.
+- **macOS** requires write permission too. Measured on macOS 27.2 with Deno
+  2.9.8 (#3666), and pinned by the same test: `0000` and `0400` are refused with
+  `EACCES`, `0200` and `0600` accepted. The `0700` directory is still checked,
+  so it is a second gate on both systems.
 - **Windows** is out of scope. There `uid()` is `null`, so the directory and
   owner checks are skipped and only the private bind and rename run; paths are
   split on `/` only, and none of it is tested.
