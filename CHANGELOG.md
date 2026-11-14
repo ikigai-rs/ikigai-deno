@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — socket-mode probe measured on macOS (ledger #3666)
+
+- The socket-mode probe in `tests/runtime_test.ts` records each dial's outcome
+  instead of throwing, and holds accepted connections open: on macOS, `connect`
+  reported `EINVAL` when the server closed first. macOS refuses `connect` to a
+  socket without write permission, as Linux does; the README says so and the
+  probe pins it.
+
 ## Unreleased — repository naming follows `ikigai-ts` (ledger #3663)
 
 - Update repository links and descriptions for the renamed `ikigai-rs/ikigai-ts`

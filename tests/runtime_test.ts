@@ -45,48 +45,58 @@ Deno.test("runtime: no Deno global names the missing adapter", () => {
 
 /**
  * What a socket file's mode gates on `connect`, measured on this OS (ledger
- * #3631): a socket owned by this uid is narrowed to each mode and dialed.
- * Linux requires write permission, and is pinned; elsewhere (macOS) the
- * answer is printed, to be recorded in the README's "Security posture" and
- * pinned here. Root bypasses the check, and Windows is out of scope, so
- * neither is measured.
+ * #3631, #3666): a socket owned by this uid is narrowed to each mode and
+ * dialed, and each dial's outcome is recorded (`accepted`, or the error's
+ * code), never thrown. Linux and macOS both require write permission, and are
+ * pinned; elsewhere the answer is printed. Root bypasses the check, and Windows
+ * is out of scope, so neither is measured.
+ *
+ * The server holds each accepted connection open until the probe ends. Closing
+ * it at once raced the dial on macOS: `Deno.connect` reads the new socket's
+ * peer address after `connect` succeeds, and macOS answers `getpeername` with
+ * `EINVAL` once the peer has closed (Linux does not), so an accepted dial was
+ * reported as `EINVAL` (#3666).
  */
 Deno.test("runtime: what a socket's mode gates on connect, by OS", async () => {
   if (Deno.build.os === "windows" || Deno.uid() === 0) return;
   const dir = Deno.makeTempDirSync({ prefix: "ik-mode-" });
   const path = `${dir}/m.sock`;
   const listener = Deno.listen({ transport: "unix", path });
+  const held: Deno.Conn[] = [];
   const accepting = (async () => {
     try {
-      for await (const c of listener) c.close();
+      for await (const c of listener) held.push(c);
     } catch {
       // closed
     }
   })();
-  const dials: Record<string, boolean> = {};
+  const dials: Record<string, string> = {};
   try {
     for (const mode of [0o000, 0o400, 0o200, 0o600]) {
       Deno.chmodSync(path, mode);
+      const key = `0${mode.toString(8).padStart(3, "0")}`;
       try {
         (await Deno.connect({ transport: "unix", path })).close();
-        dials[`0${mode.toString(8).padStart(3, "0")}`] = true;
+        dials[key] = "accepted";
       } catch (e) {
-        if (!(e instanceof Deno.errors.PermissionDenied)) throw e;
-        dials[`0${mode.toString(8).padStart(3, "0")}`] = false;
+        dials[key] = (e as { code?: string }).code ?? String(e);
       }
     }
   } finally {
     listener.close();
     await accepting;
+    for (const c of held) c.close();
     Deno.removeSync(dir, { recursive: true });
   }
-  console.log(`${Deno.build.os}: connect accepted? ${JSON.stringify(dials)}`);
-  if (Deno.build.os === "linux") {
+  console.log(
+    `${Deno.build.os}: connect outcome by mode ${JSON.stringify(dials)}`,
+  );
+  if (Deno.build.os === "linux" || Deno.build.os === "darwin") {
     assertEquals(dials, {
-      "0000": false,
-      "0400": false,
-      "0200": true,
-      "0600": true,
+      "0000": "EACCES",
+      "0400": "EACCES",
+      "0200": "accepted",
+      "0600": "accepted",
     });
   }
 });
